@@ -125,8 +125,50 @@ $out | ConvertTo-Json -Compress
         return results
 
     def get_service(self, service_name: str) -> dict:
-        results = self.get_services_by_names([service_name])
-        return results[0] if results else {"name": service_name, "display_name": service_name, "status": "Unknown", "error": "No result"}
+        """Fetch rich details for a single service via CIM (path, description, account, PID)."""
+        safe = service_name.replace("'", "")
+        script = f"""
+$s = Get-CimInstance Win32_Service -Filter "Name='{safe}'" -ErrorAction SilentlyContinue
+if (-not $s) {{ Write-Error "Service not found: {safe}"; exit 1 }}
+[PSCustomObject]@{{
+    Name        = $s.Name
+    DisplayName = $s.DisplayName
+    State       = $s.State
+    StartMode   = $s.StartMode
+    PathName    = $s.PathName
+    Description = $s.Description
+    StartName   = $s.StartName
+    ProcessId   = $s.ProcessId
+}} | ConvertTo-Json -Compress
+"""
+        stdout, stderr, code = self._run_ps(script)
+        if code != 0:
+            return {
+                "name": service_name, "display_name": service_name,
+                "status": "Unknown", "start_type": "",
+                "path": "", "description": "", "account": "", "pid": 0,
+                "error": stderr or "Service not found",
+            }
+        raw = json.loads(stdout)
+        state_map = {
+            "Running": "Running", "Stopped": "Stopped", "Paused": "Paused",
+            "Start Pending": "StartPending", "Stop Pending": "StopPending",
+            "Continue Pending": "ContinuePending", "Pause Pending": "PausePending",
+        }
+        start_map = {"Auto": "Automatic", "Manual": "Manual", "Disabled": "Disabled",
+                     "Boot": "Boot", "System": "System"}
+        state = raw.get("State") or ""
+        return {
+            "name":         raw.get("Name") or service_name,
+            "display_name": raw.get("DisplayName") or service_name,
+            "status":       state_map.get(state, state) or "Unknown",
+            "start_type":   start_map.get(raw.get("StartMode") or "", raw.get("StartMode") or ""),
+            "path":         raw.get("PathName") or "",
+            "description":  raw.get("Description") or "",
+            "account":      raw.get("StartName") or "",
+            "pid":          int(raw.get("ProcessId") or 0),
+            "error":        None,
+        }
 
     def start_service(self, service_name: str) -> str:
         script = f"Start-Service -Name '{service_name}' -ErrorAction Stop; 'OK'"

@@ -110,9 +110,29 @@
             <div class="detail-label">Группы</div>
             <div class="detail-value" id="dm-groups">—</div>
           </div>
+          <div class="col-6">
+            <div class="detail-label">Учётная запись</div>
+            <div class="detail-value font-monospace small" id="dm-account">
+              <span class="tree-spinner"></span>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="detail-label">PID</div>
+            <div class="detail-value font-monospace small" id="dm-pid">
+              <span class="tree-spinner"></span>
+            </div>
+          </div>
+          <div class="col-12 d-none" id="dm-path-wrap">
+            <div class="detail-label">Путь к исполняемому файлу</div>
+            <div class="detail-value font-monospace small text-break" id="dm-path"></div>
+          </div>
+          <div class="col-12 d-none" id="dm-windesc-wrap">
+            <div class="detail-label">Описание (Windows)</div>
+            <div class="detail-value text-muted small" id="dm-windesc"></div>
+          </div>
         </div>
         <div id="dm-desc-wrap" class="d-none">
-          <div class="detail-label">Описание</div>
+          <div class="detail-label">Описание (конфиг)</div>
           <div class="detail-value text-muted small" id="dm-desc"></div>
         </div>
       </div>
@@ -443,6 +463,10 @@ function openDetail(rowEl) {
   document.getElementById('dm-groups').textContent = '...';
   document.getElementById('dm-starttype').textContent = '—';
   document.getElementById('dm-status').innerHTML = '<span class="tree-spinner"></span>';
+  document.getElementById('dm-account').innerHTML = '<span class="tree-spinner"></span>';
+  document.getElementById('dm-pid').innerHTML = '<span class="tree-spinner"></span>';
+  document.getElementById('dm-path-wrap').classList.add('d-none');
+  document.getElementById('dm-windesc-wrap').classList.add('d-none');
 
   const descWrap = document.getElementById('dm-desc-wrap');
   if (detailCtx.desc) {
@@ -484,6 +508,25 @@ async function loadDetailStatus() {
     document.getElementById('dm-btn-start').disabled   = isRun || isUnknown;
     document.getElementById('dm-btn-stop').disabled    = isStopped || isUnknown;
     document.getElementById('dm-btn-restart').disabled = isUnknown;
+
+    document.getElementById('dm-account').textContent = data.account || '—';
+    document.getElementById('dm-pid').textContent = (isRun && data.pid) ? data.pid : '—';
+
+    const pathWrap = document.getElementById('dm-path-wrap');
+    if (data.path) {
+      document.getElementById('dm-path').textContent = data.path;
+      pathWrap.classList.remove('d-none');
+    } else {
+      pathWrap.classList.add('d-none');
+    }
+
+    const winDescWrap = document.getElementById('dm-windesc-wrap');
+    if (data.description) {
+      document.getElementById('dm-windesc').textContent = data.description;
+      winDescWrap.classList.remove('d-none');
+    } else {
+      winDescWrap.classList.add('d-none');
+    }
   }
 
   // Groups
