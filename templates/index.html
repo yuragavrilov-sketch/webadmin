@@ -1,8 +1,29 @@
 {% extends "base.html" %}
 {% block title %}Главная — Service Portal{% endblock %}
 
+{% block head %}
+<style>
+  .mode-btn.active { font-weight: 600; }
+  .server-badge { font-size: .7rem; padding: .2em .5em; vertical-align: middle; }
+  #bulk-actions .btn { min-width: 110px; }
+</style>
+{% endblock %}
+
 {% block content %}
-<h4 class="mb-4"><i class="bi bi-house-door me-2"></i>Управление Windows-сервисами</h4>
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-house-door me-2"></i>Управление сервисами</h4>
+  <!-- Mode toggle -->
+  <div class="btn-group" role="group">
+    <button id="mode-servers" type="button" class="btn btn-outline-primary mode-btn active"
+            onclick="setMode('servers')">
+      <i class="bi bi-hdd-network me-1"></i>По серверам
+    </button>
+    <button id="mode-groups" type="button" class="btn btn-outline-primary mode-btn"
+            onclick="setMode('groups')">
+      <i class="bi bi-collection me-1"></i>По группам
+    </button>
+  </div>
+</div>
 
 {% if not servers %}
 <div class="alert alert-info">
@@ -10,64 +31,88 @@
 </div>
 {% else %}
 
-<!-- Server tabs -->
-<ul class="nav nav-tabs mb-0" id="server-tabs">
-  {% for server in servers %}
-  <li class="nav-item">
-    <button class="nav-link {% if loop.first %}active{% endif %}"
-            data-server-id="{{ server.id }}"
-            data-server-name="{{ server.name }}"
-            onclick="selectServer({{ server.id }}, '{{ server.name }}')">
-      <i class="bi bi-hdd-network me-1"></i>{{ server.name }}
-    </button>
-  </li>
-  {% endfor %}
-</ul>
-
-<!-- Services panel -->
-<div class="card rounded-top-0">
-  <div class="card-header d-flex justify-content-between align-items-center py-2">
-    <span id="panel-title" class="fw-semibold"></span>
-    <div class="d-flex gap-2 align-items-center">
-      <input type="text" id="svc-search" class="form-control form-control-sm"
-             placeholder="Поиск..." style="width:200px">
-      <button class="btn btn-sm btn-outline-secondary" id="btn-refresh">
-        <i class="bi bi-arrow-clockwise"></i>
+<!-- ─── Server tabs (mode = servers) ────────────────────────────── -->
+<div id="section-servers">
+  <ul class="nav nav-tabs mb-0" id="server-tabs">
+    {% for server in servers %}
+    <li class="nav-item">
+      <button class="nav-link {% if loop.first %}active{% endif %}"
+              data-server-id="{{ server.id }}"
+              data-server-name="{{ server.name }}"
+              onclick="selectServer({{ server.id }}, '{{ server.name }}')">
+        <i class="bi bi-hdd-network me-1"></i>{{ server.name }}
       </button>
-      <a id="btn-configure" href="/servers" class="btn btn-sm btn-outline-primary" title="Настроить список сервисов">
-        <i class="bi bi-gear me-1"></i>Настроить
-      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+
+<!-- ─── Group tabs (mode = groups) ──────────────────────────────── -->
+<div id="section-groups" class="d-none">
+  <div id="groups-loading" class="text-center py-3 d-none">
+    <div class="spinner-border spinner-border-sm text-primary"></div>
+  </div>
+  <ul class="nav nav-tabs mb-0" id="group-tabs"></ul>
+  <div id="no-groups-hint" class="alert alert-info mb-0 rounded-0 rounded-bottom d-none">
+    Нет групп. <a href="/groups">Создайте группу</a> и добавьте в неё сервисы.
+  </div>
+</div>
+
+<!-- ─── Services panel (shared) ─────────────────────────────────── -->
+<div class="card rounded-top-0" id="services-card">
+  <div class="card-header py-2">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <span id="panel-title" class="fw-semibold"></span>
+      <!-- Bulk actions (groups mode only) -->
+      <div id="bulk-actions" class="d-flex gap-1 d-none">
+        <button class="btn btn-sm btn-success" onclick="groupAction('start')">
+          <i class="bi bi-play-fill me-1"></i>Запустить все
+        </button>
+        <button class="btn btn-sm btn-danger" onclick="groupAction('stop')">
+          <i class="bi bi-stop-fill me-1"></i>Остановить все
+        </button>
+        <button class="btn btn-sm btn-warning" onclick="groupAction('restart')">
+          <i class="bi bi-arrow-clockwise me-1"></i>Перезапустить все
+        </button>
+      </div>
+      <div class="d-flex gap-2 ms-auto">
+        <input type="text" id="svc-search" class="form-control form-control-sm"
+               placeholder="Поиск..." style="width:180px">
+        <button class="btn btn-sm btn-outline-secondary" id="btn-refresh">
+          <i class="bi bi-arrow-clockwise"></i>
+        </button>
+        <a id="btn-configure" href="/servers" class="btn btn-sm btn-outline-secondary" title="Настроить">
+          <i class="bi bi-gear"></i>
+        </a>
+      </div>
     </div>
   </div>
 
   <div class="card-body p-0">
-    <!-- Loading -->
     <div id="svc-loading" class="text-center py-5 d-none">
       <div class="spinner-border text-primary"></div>
       <p class="mt-2 text-muted small">Загрузка...</p>
     </div>
-
-    <!-- No configs hint -->
     <div id="svc-no-config" class="text-center py-5 text-muted d-none">
       <i class="bi bi-gear fs-1 d-block mb-2"></i>
       <p class="mb-2">Для этого сервера не настроены сервисы.</p>
-      <a href="/servers" class="btn btn-primary btn-sm">
-        <i class="bi bi-gear me-1"></i>Настроить сервисы
-      </a>
+      <a href="/servers" class="btn btn-primary btn-sm"><i class="bi bi-gear me-1"></i>Настроить</a>
     </div>
-
-    <!-- Error -->
+    <div id="svc-no-members" class="text-center py-5 text-muted d-none">
+      <i class="bi bi-collection fs-1 d-block mb-2"></i>
+      <p class="mb-2">В группе нет сервисов.</p>
+      <a href="/groups" class="btn btn-primary btn-sm"><i class="bi bi-list-check me-1"></i>Настроить группу</a>
+    </div>
     <div id="svc-error" class="text-center py-5 text-danger d-none">
       <i class="bi bi-exclamation-triangle fs-1 d-block mb-2"></i>
-      <p id="svc-error-msg"></p>
+      <p id="svc-error-msg" class="mb-0"></p>
     </div>
-
-    <!-- Services table -->
     <div class="table-responsive">
       <table class="table table-hover table-sm mb-0 d-none" id="svc-table">
         <thead class="table-light">
           <tr>
-            <th style="width:40px"></th>
+            <th style="width:32px"></th>
+            <th id="col-server-th" class="d-none">Сервер</th>
             <th>Сервис</th>
             <th>Системное имя</th>
             <th>Статус</th>
@@ -81,29 +126,178 @@
   </div>
 </div>
 
+<!-- ─── Bulk action result modal ─────────────────────────────────── -->
+<div class="modal fade" id="bulkResultModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="bulk-result-title">Результат</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr><th>Сервер</th><th>Сервис</th><th>Результат</th><th>Сообщение</th></tr>
+          </thead>
+          <tbody id="bulk-result-tbody"></tbody>
+        </table>
+      </div>
+      <div class="modal-footer justify-content-between">
+        <span id="bulk-result-summary" class="small text-muted"></span>
+        <button type="button" class="btn btn-primary btn-sm" onclick="refreshCurrent(); bootstrap.Modal.getInstance(document.getElementById('bulkResultModal')).hide()">
+          <i class="bi bi-arrow-clockwise me-1"></i>Обновить статусы
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
+let mode = 'servers';        // 'servers' | 'groups'
 let currentServerId = null;
+let currentGroupId  = null;
 let currentServices = [];
+const bulkResultModal = new bootstrap.Modal(document.getElementById('bulkResultModal'));
 
-function selectServer(id, name) {
-  currentServerId = id;
-  // Update tab active state
-  document.querySelectorAll('#server-tabs .nav-link').forEach(btn => {
-    btn.classList.toggle('active', parseInt(btn.dataset.serverId) === id);
-  });
-  document.getElementById('panel-title').textContent = name;
-  history.replaceState(null, '', `/?server=${id}`);
-  loadServices(id);
+// ── Mode switch ───────────────────────────────────────────────────────────────
+function setMode(m) {
+  mode = m;
+  document.getElementById('mode-servers').classList.toggle('active', m === 'servers');
+  document.getElementById('mode-groups').classList.toggle('active', m === 'groups');
+  document.getElementById('section-servers').classList.toggle('d-none', m !== 'servers');
+  document.getElementById('section-groups').classList.toggle('d-none', m !== 'groups');
+  document.getElementById('bulk-actions').classList.toggle('d-none', m !== 'groups');
+  document.getElementById('col-server-th').classList.toggle('d-none', m !== 'groups');
+  document.getElementById('btn-configure').href = m === 'groups' ? '/groups' : '/servers';
+
+  showPanel('svc-loading');
+
+  if (m === 'groups') {
+    loadGroupTabs();
+  } else {
+    // Restore server mode
+    const active = document.querySelector('#server-tabs .nav-link.active');
+    if (active) {
+      selectServer(parseInt(active.dataset.serverId), active.dataset.serverName);
+    }
+  }
 }
 
-document.getElementById('btn-refresh')?.addEventListener('click', () => {
-  if (currentServerId) loadServices(currentServerId);
-});
+// ── Servers mode ─────────────────────────────────────────────────────────────
+function selectServer(id, name) {
+  currentServerId = id;
+  document.querySelectorAll('#server-tabs .nav-link').forEach(b =>
+    b.classList.toggle('active', parseInt(b.dataset.serverId) === id));
+  document.getElementById('panel-title').textContent = name;
+  history.replaceState(null, '', `/?server=${id}`);
+  loadServerServices(id);
+}
 
+async function loadServerServices(serverId) {
+  showPanel('svc-loading');
+  const { ok, data } = await apiCall(`/api/servers/${serverId}/services`);
+  if (!ok) { showError(data.error || 'Ошибка подключения'); return; }
+  if (!data.length) { showPanel('svc-no-config'); return; }
+  currentServices = data;
+  renderServices(data, false);
+  showPanel('svc-table');
+}
+
+// ── Groups mode ───────────────────────────────────────────────────────────────
+async function loadGroupTabs() {
+  document.getElementById('groups-loading').classList.remove('d-none');
+  document.getElementById('group-tabs').innerHTML = '';
+  document.getElementById('no-groups-hint').classList.add('d-none');
+
+  const { ok, data } = await apiCall('/api/groups');
+  document.getElementById('groups-loading').classList.add('d-none');
+
+  if (!ok || !data.length) {
+    document.getElementById('no-groups-hint').classList.remove('d-none');
+    showPanel('svc-no-members');
+    return;
+  }
+
+  // Check URL for ?group=
+  const urlGroup = parseInt(new URLSearchParams(window.location.search).get('group'));
+  const firstId = urlGroup && data.find(g => g.id === urlGroup) ? urlGroup : data[0].id;
+
+  document.getElementById('group-tabs').innerHTML = data.map(g => `
+    <li class="nav-item">
+      <button class="nav-link ${g.id === firstId ? 'active' : ''}"
+              data-group-id="${g.id}" data-group-name="${esc(g.name)}"
+              onclick="selectGroup(${g.id}, '${esc(g.name)}', '${g.color}')">
+        <span class="badge bg-${g.color} me-1" style="font-size:.65rem">${g.item_count}</span>
+        ${esc(g.name)}
+      </button>
+    </li>`).join('');
+
+  const initGroup = data.find(g => g.id === firstId) || data[0];
+  selectGroup(initGroup.id, initGroup.name, initGroup.color);
+}
+
+function selectGroup(id, name, color) {
+  currentGroupId = id;
+  document.querySelectorAll('#group-tabs .nav-link').forEach(b =>
+    b.classList.toggle('active', parseInt(b.dataset.groupId) === id));
+  document.getElementById('panel-title').textContent = name;
+  history.replaceState(null, '', `/?group=${id}`);
+  loadGroupServices(id);
+}
+
+async function loadGroupServices(groupId) {
+  showPanel('svc-loading');
+  const { ok, data } = await apiCall(`/api/groups/${groupId}/services`);
+  if (!ok) { showError(data.error || 'Ошибка'); return; }
+  if (!data.length) { showPanel('svc-no-members'); return; }
+  currentServices = data;
+  renderServices(data, true);
+  showPanel('svc-table');
+}
+
+async function groupAction(action) {
+  const labels = { start: 'Запуск', stop: 'Остановка', restart: 'Перезапуск' };
+  if (action === 'stop' || action === 'restart') {
+    if (!confirm(`${labels[action]} всех сервисов в группе. Продолжить?`)) return;
+  }
+
+  const btns = document.querySelectorAll('#bulk-actions button');
+  btns.forEach(b => { b.disabled = true; });
+  const origHtml = Array.from(btns).map(b => b.innerHTML);
+  btns[0].innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Выполнение...';
+
+  const { ok, data } = await apiCall(`/api/groups/${currentGroupId}/action`, 'POST', { action });
+
+  btns.forEach((b, i) => { b.disabled = false; b.innerHTML = origHtml[i]; });
+
+  if (!ok) { showToast(data.error || 'Ошибка', 'danger'); return; }
+
+  // Show result modal
+  const resultLabels = { start: 'Запуск всех', stop: 'Остановка всех', restart: 'Перезапуск всех' };
+  document.getElementById('bulk-result-title').textContent = resultLabels[action];
+  document.getElementById('bulk-result-tbody').innerHTML = data.results.map(r => `
+    <tr class="${r.success ? '' : 'table-danger'}">
+      <td><span class="badge bg-secondary">${esc(r.server_name)}</span></td>
+      <td class="font-monospace small">${esc(r.service_name)}</td>
+      <td>${r.success ? '<span class="badge bg-success">OK</span>' : '<span class="badge bg-danger">Ошибка</span>'}</td>
+      <td class="small text-muted">${esc(r.message)}</td>
+    </tr>`).join('');
+  document.getElementById('bulk-result-summary').textContent =
+    `Успешно: ${data.success_count} / ${data.results.length}`;
+  bulkResultModal.show();
+}
+
+// ── Refresh ───────────────────────────────────────────────────────────────────
+function refreshCurrent() {
+  if (mode === 'servers' && currentServerId) loadServerServices(currentServerId);
+  if (mode === 'groups' && currentGroupId) loadGroupServices(currentGroupId);
+}
+
+document.getElementById('btn-refresh')?.addEventListener('click', refreshCurrent);
 document.getElementById('svc-search')?.addEventListener('input', function () {
   filterTable(this.value.toLowerCase());
 });
@@ -114,82 +308,54 @@ function filterTable(q) {
   });
 }
 
-function showPanel(which) {
-  ['svc-loading', 'svc-no-config', 'svc-error', 'svc-table'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.classList.toggle('d-none', id !== which);
-  });
-}
-
-async function loadServices(serverId) {
+// ── Render services ───────────────────────────────────────────────────────────
+function renderServices(services, showServerCol) {
+  document.getElementById('col-server-th').classList.toggle('d-none', !showServerCol);
   document.getElementById('svc-search').value = '';
-  showPanel('svc-loading');
 
-  const { ok, data } = await apiCall(`/api/servers/${serverId}/services`);
-
-  if (!ok) {
-    document.getElementById('svc-error-msg').textContent = data.error || 'Ошибка подключения';
-    showPanel('svc-error');
-    return;
-  }
-
-  if (!data.length) {
-    showPanel('svc-no-config');
-    return;
-  }
-
-  currentServices = data;
-  renderServices(data);
-  showPanel('svc-table');
-}
-
-function renderServices(services) {
   document.getElementById('svc-tbody').innerHTML = services.map(svc => {
     const isRunning = svc.status === 'Running';
     const isStopped = svc.status === 'Stopped';
     const isUnknown = svc.status === 'Unknown';
 
-    let badgeClass = 'bg-secondary';
-    if (isRunning) badgeClass = 'bg-success';
-    else if (isUnknown) badgeClass = 'bg-warning text-dark';
-
-    const statusIcon = isRunning
-      ? '<i class="bi bi-circle-fill text-success small"></i>'
-      : isUnknown
-        ? '<i class="bi bi-question-circle text-warning small"></i>'
-        : '<i class="bi bi-circle text-secondary small"></i>';
-
+    const dotClass = isRunning ? 'text-success' : isUnknown ? 'text-warning' : 'text-secondary';
+    const dot = `<i class="bi bi-circle-fill small ${dotClass}"></i>`;
+    const badgeClass = isRunning ? 'bg-success' : isUnknown ? 'bg-warning text-dark' : 'bg-secondary';
     const errorHint = svc.error
-      ? `<span class="text-danger small ms-1" title="${esc(svc.error)}"><i class="bi bi-exclamation-circle"></i></span>`
-      : '';
+      ? `<i class="bi bi-exclamation-circle text-danger ms-1" title="${esc(svc.error)}"></i>` : '';
 
     const label = svc.label || svc.display_name || svc.name;
+    const serverBadge = showServerCol
+      ? `<td><span class="badge bg-secondary server-badge">${esc(svc.server_name || '')}</span></td>` : '';
+
+    // Identify the service uniquely (server_id + service_name for groups mode)
+    const key = showServerCol
+      ? `${svc.server_id}__${svc.service_name}` : svc.name;
 
     return `
-      <tr id="svc-row-${CSS.escape(svc.name)}">
-        <td class="text-center align-middle">${statusIcon}</td>
+      <tr id="svc-row-${CSS.escape(key)}">
+        <td class="text-center align-middle">${dot}</td>
+        ${serverBadge}
         <td class="align-middle">
           <span class="fw-semibold">${esc(label)}</span>${errorHint}
           ${svc.config_description ? `<br><span class="text-muted small">${esc(svc.config_description)}</span>` : ''}
         </td>
-        <td class="font-monospace small align-middle text-muted">${esc(svc.name)}</td>
-        <td class="align-middle">
-          <span class="badge status-badge ${badgeClass}">${esc(svc.status)}</span>
-        </td>
+        <td class="font-monospace small text-muted align-middle">${esc(svc.name)}</td>
+        <td class="align-middle"><span class="badge status-badge ${badgeClass}">${esc(svc.status)}</span></td>
         <td class="small text-muted align-middle">${esc(svc.start_type)}</td>
         <td class="text-end align-middle text-nowrap">
           <button class="btn btn-outline-success btn-action me-1"
-                  onclick="doAction('${esc(svc.name)}', 'start')"
+                  onclick="doAction('${key}', 'start')"
                   ${isRunning || isUnknown ? 'disabled' : ''} title="Запустить">
             <i class="bi bi-play-fill"></i>
           </button>
           <button class="btn btn-outline-danger btn-action me-1"
-                  onclick="doAction('${esc(svc.name)}', 'stop')"
+                  onclick="doAction('${key}', 'stop')"
                   ${isStopped || isUnknown ? 'disabled' : ''} title="Остановить">
             <i class="bi bi-stop-fill"></i>
           </button>
           <button class="btn btn-outline-warning btn-action"
-                  onclick="doAction('${esc(svc.name)}', 'restart')"
+                  onclick="doAction('${key}', 'restart')"
                   ${isUnknown ? 'disabled' : ''} title="Перезапустить">
             <i class="bi bi-arrow-clockwise"></i>
           </button>
@@ -198,26 +364,41 @@ function renderServices(services) {
   }).join('');
 }
 
-async function doAction(serviceName, action) {
+async function doAction(key, action) {
   const labels = { start: 'Запуск', stop: 'Остановка', restart: 'Перезапуск' };
-  const btns = document.querySelectorAll(`#svc-row-${CSS.escape(serviceName)} button`);
+  const btns = document.querySelectorAll(`#svc-row-${CSS.escape(key)} button`);
   btns.forEach(b => b.disabled = true);
 
+  // Resolve server_id + service_name from key
+  let serverId, serviceName;
+  if (mode === 'groups') {
+    const [sid, sname] = key.split('__');
+    serverId = parseInt(sid);
+    serviceName = sname;
+  } else {
+    serverId = currentServerId;
+    serviceName = key;
+  }
+
   const { ok, data } = await apiCall(
-    `/api/servers/${currentServerId}/services/${encodeURIComponent(serviceName)}/action`,
+    `/api/servers/${serverId}/services/${encodeURIComponent(serviceName)}/action`,
     'POST', { action }
   );
 
   if (ok) {
     showToast(`${labels[action]} "${serviceName}": успешно`, 'success');
-    // Refresh only this service
+    // Refresh just this service
     const { ok: ok2, data: svc } = await apiCall(
-      `/api/servers/${currentServerId}/services/${encodeURIComponent(serviceName)}`
+      `/api/servers/${serverId}/services/${encodeURIComponent(serviceName)}`
     );
     if (ok2) {
-      const idx = currentServices.findIndex(s => s.name === serviceName);
+      const idx = currentServices.findIndex(s =>
+        mode === 'groups'
+          ? (s.server_id === serverId && s.service_name === serviceName)
+          : s.name === serviceName
+      );
       if (idx !== -1) currentServices[idx] = { ...currentServices[idx], status: svc.status };
-      renderServices(currentServices);
+      renderServices(currentServices, mode === 'groups');
       const q = document.getElementById('svc-search').value.toLowerCase();
       if (q) filterTable(q);
     }
@@ -227,19 +408,37 @@ async function doAction(serviceName, action) {
   }
 }
 
+// ── Panel state helpers ───────────────────────────────────────────────────────
+function showPanel(which) {
+  ['svc-loading','svc-no-config','svc-no-members','svc-error','svc-table'].forEach(id => {
+    document.getElementById(id)?.classList.toggle('d-none', id !== which);
+  });
+}
+
+function showError(msg) {
+  document.getElementById('svc-error-msg').textContent = msg;
+  showPanel('svc-error');
+}
+
 function esc(str) {
   const d = document.createElement('div');
   d.textContent = str || '';
   return d.innerHTML;
 }
 
-// ── Auto-select server from URL or first tab ─────────────────────────────────
-const urlServerId = parseInt(new URLSearchParams(window.location.search).get('server'));
-const firstTab = document.querySelector('#server-tabs .nav-link');
-if (firstTab) {
-  const initId = urlServerId || parseInt(firstTab.dataset.serverId);
-  const initName = document.querySelector(`#server-tabs .nav-link[data-server-id="${initId}"]`)?.dataset.serverName || '';
-  selectServer(initId, initName);
+// ── Init ──────────────────────────────────────────────────────────────────────
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.get('group')) {
+  setMode('groups');
+} else {
+  // Server mode: pick from URL or first tab
+  const urlServerId = parseInt(urlParams.get('server'));
+  const firstTab = document.querySelector('#server-tabs .nav-link');
+  if (firstTab) {
+    const initId = urlServerId || parseInt(firstTab.dataset.serverId);
+    const btn = document.querySelector(`#server-tabs .nav-link[data-server-id="${initId}"]`) || firstTab;
+    selectServer(parseInt(btn.dataset.serverId), btn.dataset.serverName);
+  }
 }
 </script>
 {% endblock %}

@@ -1,7 +1,8 @@
 from flask import Flask, jsonify, request, render_template, abort
 from cryptography.fernet import Fernet, InvalidToken
 from config import Config
-from models import db, Server, AuditLog, ServiceConfig
+from collections import defaultdict
+from models import db, Server, AuditLog, ServiceConfig, ServiceGroup, ServiceGroupItem
 from winrm_manager import WinRMManager, WinRMError
 from datetime import datetime
 
@@ -66,6 +67,11 @@ def servers_page():
 @app.route("/logs")
 def logs_page():
     return render_template("logs.html")
+
+
+@app.route("/groups")
+def groups_page():
+    return render_template("groups.html")
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +343,301 @@ def api_service_action(server_id, service_name):
     db.session.commit()
 
     return jsonify({"success": success, "message": message}), (200 if success else 502)
+
+
+# ---------------------------------------------------------------------------
+# API — Service-configs index (picker helper)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/service-configs", methods=["GET"])
+def api_all_service_configs():
+    """All configured services across all servers — used by the group member picker."""
+    configs = (ServiceConfig.query
+               .join(ServiceConfig.server)
+               .order_by(Server.name, ServiceConfig.sort_order)
+               .all())
+    result = []
+    for c in configs:
+        result.append({
+            **c.to_dict(),
+            "server_name": c.server.name if c.server else "",
+        })
+    return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+# API — Groups CRUD
+# ---------------------------------------------------------------------------
+
+@app.route("/api/groups", methods=["GET"])
+def api_list_groups():
+    groups = ServiceGroup.query.order_by(ServiceGroup.sort_order, ServiceGroup.name).all()
+    return jsonify([g.to_dict() for g in groups])
+
+
+@app.route("/api/groups", methods=["POST"])
+def api_create_group():
+    data = request.get_json(force=True)
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    if ServiceGroup.query.filter_by(name=name).first():
+        return jsonify({"error": "Group with this name already exists."}), 409
+
+    max_order = db.session.query(db.func.max(ServiceGroup.sort_order)).scalar() or 0
+    grp = ServiceGroup(
+        name=name,
+        description=(data.get("description") or "").strip() or None,
+        color=data.get("color", "primary"),
+        sort_order=max_order + 10,
+    )
+    db.session.add(grp)
+    db.session.commit()
+    return jsonify(grp.to_dict()), 201
+
+
+@app.route("/api/groups/<int:group_id>", methods=["GET"])
+def api_get_group(group_id):
+    grp = db.session.get(ServiceGroup, group_id)
+    if not grp:
+        return jsonify({"error": "Group not found"}), 404
+    result = grp.to_dict()
+    result["items"] = [i.to_dict() for i in grp.items]
+    return jsonify(result)
+
+
+@app.route("/api/groups/<int:group_id>", methods=["PUT"])
+def api_update_group(group_id):
+    grp = db.session.get(ServiceGroup, group_id)
+    if not grp:
+        return jsonify({"error": "Group not found"}), 404
+    data = request.get_json(force=True)
+    if "name" in data:
+        name = data["name"].strip()
+        existing = ServiceGroup.query.filter_by(name=name).first()
+        if existing and existing.id != group_id:
+            return jsonify({"error": "Group with this name already exists."}), 409
+        grp.name = name
+    if "description" in data:
+        grp.description = (data["description"] or "").strip() or None
+    if "color" in data:
+        grp.color = data["color"]
+    if "sort_order" in data:
+        grp.sort_order = int(data["sort_order"])
+    db.session.commit()
+    return jsonify(grp.to_dict())
+
+
+@app.route("/api/groups/<int:group_id>", methods=["DELETE"])
+def api_delete_group(group_id):
+    grp = db.session.get(ServiceGroup, group_id)
+    if not grp:
+        return jsonify({"error": "Group not found"}), 404
+    db.session.delete(grp)
+    db.session.commit()
+    return jsonify({"message": "Group deleted."})
+
+
+# ---------------------------------------------------------------------------
+# API — Group items
+# ---------------------------------------------------------------------------
+
+@app.route("/api/groups/<int:group_id>/items", methods=["POST"])
+def api_add_group_item(group_id):
+    grp = db.session.get(ServiceGroup, group_id)
+    if not grp:
+        return jsonify({"error": "Group not found"}), 404
+
+    data = request.get_json(force=True)
+    cfg_id = data.get("service_config_id")
+    if not cfg_id:
+        return jsonify({"error": "service_config_id is required"}), 400
+
+    cfg = db.session.get(ServiceConfig, cfg_id)
+    if not cfg:
+        return jsonify({"error": "ServiceConfig not found"}), 404
+
+    if ServiceGroupItem.query.filter_by(group_id=group_id, service_config_id=cfg_id).first():
+        return jsonify({"error": "This service is already in the group."}), 409
+
+    max_order = db.session.query(db.func.max(ServiceGroupItem.sort_order)).filter_by(group_id=group_id).scalar() or 0
+    item = ServiceGroupItem(group_id=group_id, service_config_id=cfg_id, sort_order=max_order + 10)
+    db.session.add(item)
+    db.session.commit()
+    return jsonify(item.to_dict()), 201
+
+
+@app.route("/api/groups/<int:group_id>/items/<int:item_id>", methods=["DELETE"])
+def api_remove_group_item(group_id, item_id):
+    item = ServiceGroupItem.query.filter_by(id=item_id, group_id=group_id).first()
+    if not item:
+        return jsonify({"error": "Item not found"}), 404
+    db.session.delete(item)
+    db.session.commit()
+    return jsonify({"message": "Removed."})
+
+
+# ---------------------------------------------------------------------------
+# API — Group live services + bulk actions
+# ---------------------------------------------------------------------------
+
+def _fetch_group_services(group_id: int) -> list[dict]:
+    """Return live status for all services in a group, grouped by server for efficiency."""
+    items = (ServiceGroupItem.query
+             .filter_by(group_id=group_id)
+             .order_by(ServiceGroupItem.sort_order)
+             .all())
+    if not items:
+        return []
+
+    # Keep original item order for final sort
+    item_order = {it.id: idx for idx, it in enumerate(items)}
+
+    # Group by server to minimise WinRM connections
+    by_server: dict[int, list[ServiceGroupItem]] = defaultdict(list)
+    for it in items:
+        if it.service_config:
+            by_server[it.service_config.server_id].append(it)
+
+    results: list[dict] = []
+    for server_id, server_items in by_server.items():
+        server = db.session.get(Server, server_id)
+        if not server:
+            continue
+        names = [it.service_config.service_name for it in server_items]
+        try:
+            live_list = get_winrm(server).get_services_by_names(names)
+            live_map = {s["name"]: s for s in live_list}
+            for it in server_items:
+                cfg = it.service_config
+                svc = live_map.get(cfg.service_name, {})
+                results.append({
+                    "item_id": it.id,
+                    "config_id": cfg.id,
+                    "server_id": server_id,
+                    "server_name": server.name,
+                    "service_name": cfg.service_name,
+                    "label": cfg.display_name or svc.get("display_name", cfg.service_name),
+                    "config_description": cfg.description or "",
+                    "status": svc.get("status", "Unknown"),
+                    "start_type": svc.get("start_type", ""),
+                    "error": svc.get("error"),
+                })
+        except Exception as exc:
+            for it in server_items:
+                cfg = it.service_config
+                results.append({
+                    "item_id": it.id,
+                    "config_id": cfg.id,
+                    "server_id": server_id,
+                    "server_name": server.name,
+                    "service_name": cfg.service_name,
+                    "label": cfg.display_name or cfg.service_name,
+                    "config_description": cfg.description or "",
+                    "status": "Unknown",
+                    "start_type": "",
+                    "error": str(exc),
+                })
+
+    results.sort(key=lambda r: item_order.get(r["item_id"], 999))
+    return results
+
+
+@app.route("/api/groups/<int:group_id>/services", methods=["GET"])
+def api_group_services(group_id):
+    grp = db.session.get(ServiceGroup, group_id)
+    if not grp:
+        return jsonify({"error": "Group not found"}), 404
+    try:
+        return jsonify(_fetch_group_services(group_id))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/groups/<int:group_id>/action", methods=["POST"])
+def api_group_action(group_id):
+    """Perform start / stop / restart on every service in the group."""
+    grp = db.session.get(ServiceGroup, group_id)
+    if not grp:
+        return jsonify({"error": "Group not found"}), 404
+
+    data = request.get_json(force=True)
+    action = data.get("action", "").lower()
+    if action not in ("start", "stop", "restart"):
+        return jsonify({"error": "Invalid action. Use: start, stop, restart"}), 400
+
+    items = ServiceGroupItem.query.filter_by(group_id=group_id).all()
+    if not items:
+        return jsonify({"error": "Group has no services"}), 400
+
+    # Group by server to reuse WinRM sessions
+    by_server: dict[int, list[ServiceGroupItem]] = defaultdict(list)
+    for it in items:
+        if it.service_config:
+            by_server[it.service_config.server_id].append(it)
+
+    action_results = []
+    for server_id, server_items in by_server.items():
+        server = db.session.get(Server, server_id)
+        if not server:
+            continue
+        try:
+            mgr = get_winrm(server)
+            for it in server_items:
+                cfg = it.service_config
+                success, message = False, ""
+                try:
+                    if action == "start":
+                        mgr.start_service(cfg.service_name)
+                    elif action == "stop":
+                        mgr.stop_service(cfg.service_name)
+                    elif action == "restart":
+                        mgr.restart_service(cfg.service_name)
+                    success, message = True, "OK"
+                except WinRMError as e:
+                    message = str(e)
+                except Exception as e:
+                    message = str(e)
+
+                db.session.add(AuditLog(
+                    server_id=server_id,
+                    service_name=cfg.service_name,
+                    action=action,
+                    success=success,
+                    message=message,
+                ))
+                action_results.append({
+                    "server_name": server.name,
+                    "service_name": cfg.service_name,
+                    "label": cfg.display_name or cfg.service_name,
+                    "success": success,
+                    "message": message,
+                })
+        except Exception as exc:
+            for it in server_items:
+                cfg = it.service_config
+                db.session.add(AuditLog(
+                    server_id=server_id,
+                    service_name=cfg.service_name,
+                    action=action,
+                    success=False,
+                    message=f"Connection error: {exc}",
+                ))
+                action_results.append({
+                    "server_name": server.name,
+                    "service_name": cfg.service_name,
+                    "label": cfg.display_name or cfg.service_name,
+                    "success": False,
+                    "message": f"Connection error: {exc}",
+                })
+
+    db.session.commit()
+    ok_count = sum(1 for r in action_results if r["success"])
+    return jsonify({
+        "results": action_results,
+        "success_count": ok_count,
+        "error_count": len(action_results) - ok_count,
+    })
 
 
 # ---------------------------------------------------------------------------

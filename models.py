@@ -59,6 +59,64 @@ class ServiceConfig(db.Model):
         }
 
 
+class ServiceGroup(db.Model):
+    """A named logical group of services, potentially spanning multiple servers."""
+    __tablename__ = "service_groups"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False, unique=True)
+    description = db.Column(db.Text, nullable=True)
+    color = db.Column(db.String(20), nullable=False, default="primary")  # Bootstrap color name
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    items = db.relationship(
+        "ServiceGroupItem", backref="group", lazy=True,
+        cascade="all, delete-orphan", order_by="ServiceGroupItem.sort_order"
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description or "",
+            "color": self.color,
+            "sort_order": self.sort_order,
+            "item_count": len(self.items),
+        }
+
+
+class ServiceGroupItem(db.Model):
+    """A single service (from service_configs) that belongs to a group."""
+    __tablename__ = "service_group_items"
+    __table_args__ = (
+        db.UniqueConstraint("group_id", "service_config_id", name="uq_group_config_item"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey("service_groups.id"), nullable=False)
+    service_config_id = db.Column(
+        db.Integer, db.ForeignKey("service_configs.id", ondelete="CASCADE"), nullable=False
+    )
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+
+    service_config = db.relationship("ServiceConfig", backref=db.backref("group_items", lazy=True))
+
+    def to_dict(self):
+        cfg = self.service_config
+        return {
+            "id": self.id,
+            "group_id": self.group_id,
+            "service_config_id": self.service_config_id,
+            "server_id": cfg.server_id if cfg else None,
+            "server_name": cfg.server.name if cfg and cfg.server else None,
+            "service_name": cfg.service_name if cfg else "",
+            "display_name": cfg.display_name or "" if cfg else "",
+            "description": cfg.description or "" if cfg else "",
+            "sort_order": self.sort_order,
+        }
+
+
 class AuditLog(db.Model):
     __tablename__ = "audit_logs"
 

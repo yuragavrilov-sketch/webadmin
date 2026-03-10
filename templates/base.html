@@ -49,6 +49,11 @@
           </a>
         </li>
         <li class="nav-item">
+          <a class="nav-link {% if request.path == '/groups' %}active{% endif %}" href="/groups">
+            <i class="bi bi-collection"></i> Группы
+          </a>
+        </li>
+        <li class="nav-item">
           <a class="nav-link {% if request.path == '/logs' %}active{% endif %}" href="/logs">
             <i class="bi bi-journal-text"></i> Журнал
           </a>

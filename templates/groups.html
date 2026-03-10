@@ -1,0 +1,362 @@
+{% extends "base.html" %}
+{% block title %}Группы — Service Portal{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h4 class="mb-0"><i class="bi bi-collection me-2"></i>Группы сервисов</h4>
+  <button class="btn btn-primary" onclick="openGroupModal()">
+    <i class="bi bi-plus-lg me-1"></i>Создать группу
+  </button>
+</div>
+
+<div id="loading" class="text-center py-5">
+  <div class="spinner-border text-primary"></div>
+</div>
+
+<div id="groups-container" class="row g-3 d-none"></div>
+
+<div id="empty-msg" class="text-center py-5 text-muted d-none">
+  <i class="bi bi-collection fs-1 d-block mb-2"></i>
+  Группы не созданы
+</div>
+
+<!-- ===================== Create / Edit Group Modal ===================== -->
+<div class="modal fade" id="groupModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="gm-title">Создать группу</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="gm-id" />
+        <div class="mb-3">
+          <label class="form-label">Название <span class="text-danger">*</span></label>
+          <input type="text" class="form-control" id="gm-name" placeholder="Веб-серверы" />
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Описание</label>
+          <input type="text" class="form-control" id="gm-desc" />
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Цвет</label>
+          <div class="d-flex gap-2 flex-wrap" id="color-picker">
+            {% for color in ['primary','success','danger','warning','info','secondary','dark'] %}
+            <button type="button" class="btn btn-{{ color }} btn-sm color-opt" data-color="{{ color }}"
+                    style="width:36px;height:36px;border-radius:50%">
+            </button>
+            {% endfor %}
+          </div>
+          <input type="hidden" id="gm-color" value="primary" />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-primary" id="btn-save-group">Сохранить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Group Members Modal ===================== -->
+<div class="modal fade modal-xl" id="membersModal" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">
+          <i class="bi bi-gear me-2"></i>Состав группы:
+          <span id="mm-group-name" class="fw-bold"></span>
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+
+          <!-- Left: current members -->
+          <div class="col-md-6">
+            <div class="d-flex justify-content-between mb-2">
+              <span class="fw-semibold">Текущие участники</span>
+              <span class="text-muted small" id="mm-count"></span>
+            </div>
+            <div id="mm-loading" class="text-center py-3 d-none">
+              <div class="spinner-border spinner-border-sm text-primary"></div>
+            </div>
+            <div id="mm-empty" class="text-center text-muted py-3 d-none">
+              <i class="bi bi-inbox fs-3 d-block mb-1"></i>В группе нет сервисов
+            </div>
+            <div class="table-responsive">
+              <table class="table table-sm table-hover mb-0" id="mm-table">
+                <thead class="table-light">
+                  <tr><th>Сервер</th><th>Сервис</th><th>Метка</th><th></th></tr>
+                </thead>
+                <tbody id="mm-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Right: add members -->
+          <div class="col-md-6">
+            <div class="fw-semibold mb-2">Добавить сервис</div>
+            <input type="text" class="form-control form-control-sm mb-2" id="mm-search"
+                   placeholder="Поиск по серверу / имени..." />
+            <div id="mm-picker-loading" class="text-center py-3 d-none">
+              <div class="spinner-border spinner-border-sm text-primary"></div>
+            </div>
+            <div class="table-responsive" style="max-height:380px;overflow-y:auto">
+              <table class="table table-sm table-hover mb-0" id="mm-picker-table">
+                <thead class="table-light sticky-top">
+                  <tr><th>Сервер</th><th>Сервис</th><th>Метка</th><th></th></tr>
+                </thead>
+                <tbody id="mm-picker-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Delete Group Modal ===================== -->
+<div class="modal fade" id="deleteGroupModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Удалить группу</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">Удалить группу <strong id="dg-name"></strong>?</div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-danger" id="btn-confirm-del-group">Удалить</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const groupModal      = new bootstrap.Modal(document.getElementById('groupModal'));
+const membersModal    = new bootstrap.Modal(document.getElementById('membersModal'));
+const deleteGroupModal = new bootstrap.Modal(document.getElementById('deleteGroupModal'));
+
+let deleteGroupId = null;
+let currentGroupId = null;
+let allConfigs = [];   // /api/service-configs
+let currentMembers = []; // item ids in current group
+
+// ── Color picker ─────────────────────────────────────────────────────────────
+document.querySelectorAll('.color-opt').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.color-opt').forEach(b => b.style.outline = '');
+    btn.style.outline = '3px solid #000';
+    document.getElementById('gm-color').value = btn.dataset.color;
+  });
+});
+
+function setColorPicker(color) {
+  document.querySelectorAll('.color-opt').forEach(b => {
+    b.style.outline = b.dataset.color === color ? '3px solid #000' : '';
+  });
+  document.getElementById('gm-color').value = color;
+}
+
+// ── Group CRUD ────────────────────────────────────────────────────────────────
+function openGroupModal(group = null) {
+  document.getElementById('gm-id').value = group ? group.id : '';
+  document.getElementById('gm-title').textContent = group ? 'Редактировать группу' : 'Создать группу';
+  document.getElementById('gm-name').value = group ? group.name : '';
+  document.getElementById('gm-desc').value = group ? group.description : '';
+  setColorPicker(group ? group.color : 'primary');
+  groupModal.show();
+}
+
+document.getElementById('btn-save-group').addEventListener('click', async () => {
+  const id = document.getElementById('gm-id').value;
+  const body = {
+    name: document.getElementById('gm-name').value.trim(),
+    description: document.getElementById('gm-desc').value.trim(),
+    color: document.getElementById('gm-color').value,
+  };
+  if (!body.name) { showToast('Введите название группы', 'warning'); return; }
+
+  const { ok, data } = await apiCall(
+    id ? `/api/groups/${id}` : '/api/groups',
+    id ? 'PUT' : 'POST', body
+  );
+  if (ok) {
+    groupModal.hide();
+    showToast(id ? 'Группа обновлена' : 'Группа создана', 'success');
+    await loadGroups();
+  } else {
+    showToast(data.error || 'Ошибка', 'danger');
+  }
+});
+
+function confirmDeleteGroup(id, name) {
+  deleteGroupId = id;
+  document.getElementById('dg-name').textContent = name;
+  deleteGroupModal.show();
+}
+
+document.getElementById('btn-confirm-del-group').addEventListener('click', async () => {
+  if (!deleteGroupId) return;
+  const { ok, data } = await apiCall(`/api/groups/${deleteGroupId}`, 'DELETE');
+  deleteGroupModal.hide();
+  if (ok) { showToast('Группа удалена', 'success'); await loadGroups(); }
+  else showToast(data.error || 'Ошибка', 'danger');
+});
+
+// ── Members modal ────────────────────────────────────────────────────────────
+async function openMembersModal(groupId, groupName) {
+  currentGroupId = groupId;
+  document.getElementById('mm-group-name').textContent = groupName;
+  document.getElementById('mm-search').value = '';
+  membersModal.show();
+  await Promise.all([loadMembers(), loadAllConfigs()]);
+}
+
+async function loadMembers() {
+  document.getElementById('mm-loading').classList.remove('d-none');
+  document.getElementById('mm-table').classList.add('d-none');
+  document.getElementById('mm-empty').classList.add('d-none');
+
+  const { ok, data } = await apiCall(`/api/groups/${currentGroupId}`);
+  document.getElementById('mm-loading').classList.add('d-none');
+  if (!ok) { showToast('Ошибка загрузки', 'danger'); return; }
+
+  currentMembers = data.items || [];
+  document.getElementById('mm-count').textContent = currentMembers.length ? `(${currentMembers.length})` : '';
+
+  if (!currentMembers.length) {
+    document.getElementById('mm-empty').classList.remove('d-none');
+  } else {
+    document.getElementById('mm-table').classList.remove('d-none');
+    document.getElementById('mm-tbody').innerHTML = currentMembers.map(m => `
+      <tr id="mm-row-${m.id}">
+        <td><span class="badge bg-secondary">${esc(m.server_name || '')}</span></td>
+        <td class="font-monospace small">${esc(m.service_name)}</td>
+        <td class="text-muted small">${esc(m.display_name || '')}</td>
+        <td class="text-end">
+          <button class="btn btn-sm btn-outline-danger" onclick="removeMember(${m.id})">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </td>
+      </tr>`).join('');
+  }
+
+  // Refresh picker to grey-out already-added items
+  renderPicker(allConfigs, document.getElementById('mm-search').value.toLowerCase());
+}
+
+async function loadAllConfigs() {
+  if (allConfigs.length) return; // cache once
+  document.getElementById('mm-picker-loading').classList.remove('d-none');
+  const { ok, data } = await apiCall('/api/service-configs');
+  document.getElementById('mm-picker-loading').classList.add('d-none');
+  if (ok) { allConfigs = data; renderPicker(data, ''); }
+}
+
+function renderPicker(list, q) {
+  const memberConfigIds = new Set(currentMembers.map(m => m.service_config_id));
+  const filtered = list.filter(c => {
+    if (!q) return true;
+    return (c.server_name + ' ' + c.service_name + ' ' + c.display_name).toLowerCase().includes(q);
+  });
+  document.getElementById('mm-picker-table').style.display = filtered.length ? '' : 'none';
+  document.getElementById('mm-picker-tbody').innerHTML = filtered.map(c => {
+    const already = memberConfigIds.has(c.id);
+    return `
+      <tr class="${already ? 'text-muted' : ''}">
+        <td><span class="badge bg-secondary">${esc(c.server_name)}</span></td>
+        <td class="font-monospace small">${esc(c.service_name)}</td>
+        <td class="small">${esc(c.display_name || '')}</td>
+        <td class="text-end">
+          <button class="btn btn-sm btn-outline-primary" ${already ? 'disabled' : ''}
+                  onclick="addMember(${c.id})">
+            <i class="bi bi-plus-lg"></i>
+          </button>
+        </td>
+      </tr>`;
+  }).join('');
+}
+
+document.getElementById('mm-search').addEventListener('input', function () {
+  renderPicker(allConfigs, this.value.toLowerCase());
+});
+
+async function addMember(configId) {
+  const { ok, data } = await apiCall(`/api/groups/${currentGroupId}/items`, 'POST',
+    { service_config_id: configId });
+  if (ok) await loadMembers();
+  else showToast(data.error || 'Ошибка', 'danger');
+}
+
+async function removeMember(itemId) {
+  const { ok } = await apiCall(`/api/groups/${currentGroupId}/items/${itemId}`, 'DELETE');
+  if (ok) await loadMembers();
+}
+
+// ── Groups list rendering ─────────────────────────────────────────────────────
+function renderGroups(groups) {
+  document.getElementById('loading').classList.add('d-none');
+  if (!groups.length) {
+    document.getElementById('empty-msg').classList.remove('d-none');
+    return;
+  }
+  document.getElementById('groups-container').classList.remove('d-none');
+  document.getElementById('groups-container').innerHTML = groups.map(g => `
+    <div class="col-12 col-md-6 col-xl-4">
+      <div class="card h-100 border-top border-${g.color} border-3">
+        <div class="card-header d-flex justify-content-between align-items-center py-2">
+          <span>
+            <span class="badge bg-${g.color} me-2">${g.item_count}</span>
+            <strong>${esc(g.name)}</strong>
+          </span>
+          <div class="d-flex gap-1">
+            <a href="/?group=${g.id}" class="btn btn-sm btn-outline-${g.color}" title="Управление">
+              <i class="bi bi-play-circle"></i>
+            </a>
+            <button class="btn btn-sm btn-outline-secondary" onclick='openMembersModal(${g.id}, "${esc(g.name)}")' title="Состав">
+              <i class="bi bi-list-check"></i>
+            </button>
+            <button class="btn btn-sm btn-outline-dark" onclick='openGroupModal(${JSON.stringify(g)})' title="Редактировать">
+              <i class="bi bi-pencil"></i>
+            </button>
+            <button class="btn btn-sm btn-outline-danger" onclick="confirmDeleteGroup(${g.id}, '${esc(g.name)}')" title="Удалить">
+              <i class="bi bi-trash"></i>
+            </button>
+          </div>
+        </div>
+        <div class="card-body small text-muted py-2">
+          ${g.description ? esc(g.description) : '<span class="fst-italic">Без описания</span>'}
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+async function loadGroups() {
+  const { ok, data } = await apiCall('/api/groups');
+  if (ok) renderGroups(data);
+  else showToast('Не удалось загрузить группы', 'danger');
+}
+
+function esc(str) {
+  const d = document.createElement('div');
+  d.textContent = str || '';
+  return d.innerHTML;
+}
+
+// Reset allConfigs cache when members modal closes (in case service_configs changed)
+document.getElementById('membersModal').addEventListener('hidden.bs.modal', () => {
+  allConfigs = [];
+});
+
+loadGroups();
+</script>
+{% endblock %}
