@@ -55,8 +55,7 @@ def get_winrm(server: Server) -> WinRMManager:
 
 @app.route("/")
 def index():
-    servers = Server.query.order_by(Server.name).all()
-    return render_template("index.html", servers=servers)
+    return render_template("index.html")
 
 
 @app.route("/servers")
@@ -72,6 +71,11 @@ def logs_page():
 @app.route("/groups")
 def groups_page():
     return render_template("groups.html")
+
+
+@app.route("/services")
+def services_page():
+    return render_template("services.html")
 
 
 # ---------------------------------------------------------------------------
@@ -346,21 +350,131 @@ def api_service_action(server_id, service_name):
 
 
 # ---------------------------------------------------------------------------
-# API — Service-configs index (picker helper)
+# API — Service-configs global (Services page)
 # ---------------------------------------------------------------------------
 
 @app.route("/api/service-configs", methods=["GET"])
 def api_all_service_configs():
-    """All configured services across all servers — used by the group member picker."""
+    """All configured services across all servers, with group membership."""
     configs = (ServiceConfig.query
                .join(ServiceConfig.server)
                .order_by(Server.name, ServiceConfig.sort_order)
                .all())
     result = []
     for c in configs:
+        groups = [
+            {"item_id": gi.id, "group_id": gi.group_id,
+             "name": gi.group.name, "color": gi.group.color}
+            for gi in c.group_items if gi.group
+        ]
         result.append({
             **c.to_dict(),
             "server_name": c.server.name if c.server else "",
+            "server_hostname": c.server.hostname if c.server else "",
+            "groups": groups,
+        })
+    return jsonify(result)
+
+
+@app.route("/api/service-configs", methods=["POST"])
+def api_create_service_config_global():
+    """Create a service config from the global Services page (server_id in body)."""
+    data = request.get_json(force=True)
+    server_id = data.get("server_id")
+    if not server_id:
+        return jsonify({"error": "server_id is required"}), 400
+    server = db.session.get(Server, server_id)
+    if not server:
+        return jsonify({"error": "Server not found"}), 404
+
+    service_name = (data.get("service_name") or "").strip()
+    if not service_name:
+        return jsonify({"error": "service_name is required"}), 400
+    if ServiceConfig.query.filter_by(server_id=server_id, service_name=service_name).first():
+        return jsonify({"error": f"Service '{service_name}' is already configured for this server."}), 409
+
+    max_order = db.session.query(db.func.max(ServiceConfig.sort_order)).filter_by(server_id=server_id).scalar() or 0
+    cfg = ServiceConfig(
+        server_id=server_id,
+        service_name=service_name,
+        display_name=(data.get("display_name") or "").strip() or None,
+        description=(data.get("description") or "").strip() or None,
+        sort_order=max_order + 10,
+    )
+    db.session.add(cfg)
+    db.session.flush()  # get cfg.id without full commit
+
+    for gid in (data.get("group_ids") or []):
+        grp = db.session.get(ServiceGroup, int(gid))
+        if grp and not ServiceGroupItem.query.filter_by(group_id=gid, service_config_id=cfg.id).first():
+            max_go = db.session.query(db.func.max(ServiceGroupItem.sort_order)).filter_by(group_id=gid).scalar() or 0
+            db.session.add(ServiceGroupItem(group_id=gid, service_config_id=cfg.id, sort_order=max_go + 10))
+
+    db.session.commit()
+    groups = [
+        {"item_id": gi.id, "group_id": gi.group_id, "name": gi.group.name, "color": gi.group.color}
+        for gi in cfg.group_items if gi.group
+    ]
+    return jsonify({**cfg.to_dict(), "server_name": server.name, "groups": groups}), 201
+
+
+@app.route("/api/service-configs/<int:cfg_id>", methods=["PUT"])
+def api_update_service_config_global(cfg_id):
+    cfg = db.session.get(ServiceConfig, cfg_id)
+    if not cfg:
+        return jsonify({"error": "Not found"}), 404
+    data = request.get_json(force=True)
+    if "display_name" in data:
+        cfg.display_name = (data["display_name"] or "").strip() or None
+    if "description" in data:
+        cfg.description = (data["description"] or "").strip() or None
+    db.session.commit()
+    return jsonify(cfg.to_dict())
+
+
+@app.route("/api/service-configs/<int:cfg_id>", methods=["DELETE"])
+def api_delete_service_config_global(cfg_id):
+    cfg = db.session.get(ServiceConfig, cfg_id)
+    if not cfg:
+        return jsonify({"error": "Not found"}), 404
+    db.session.delete(cfg)
+    db.session.commit()
+    return jsonify({"message": "Deleted."})
+
+
+# ---------------------------------------------------------------------------
+# API — Groups tree (main page — DB only, no WinRM)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/groups/tree", methods=["GET"])
+def api_groups_tree():
+    """All groups with items pre-grouped by server. No live WinRM calls."""
+    groups = ServiceGroup.query.order_by(ServiceGroup.sort_order, ServiceGroup.name).all()
+    result = []
+    for g in groups:
+        servers_map: dict[int, dict] = {}
+        for it in g.items:
+            cfg = it.service_config
+            if not cfg:
+                continue
+            sid = cfg.server_id
+            if sid not in servers_map:
+                servers_map[sid] = {
+                    "server_id": sid,
+                    "server_name": cfg.server.name if cfg.server else "Unknown",
+                    "services": [],
+                }
+            servers_map[sid]["services"].append({
+                "item_id": it.id,
+                "config_id": cfg.id,
+                "server_id": sid,
+                "service_name": cfg.service_name,
+                "label": cfg.display_name or cfg.service_name,
+                "description": cfg.description or "",
+            })
+        result.append({
+            **g.to_dict(),
+            "servers": list(servers_map.values()),
         })
     return jsonify(result)
 

@@ -43,15 +43,26 @@
             <i class="bi bi-house-door"></i> Главная
           </a>
         </li>
+        <li class="nav-item mt-2">
+          <span class="nav-link disabled py-1" style="font-size:.7rem;text-transform:uppercase;letter-spacing:.8px;opacity:.5">Настройка</span>
+        </li>
         <li class="nav-item">
           <a class="nav-link {% if request.path == '/servers' %}active{% endif %}" href="/servers">
             <i class="bi bi-hdd-network"></i> Серверы
           </a>
         </li>
         <li class="nav-item">
+          <a class="nav-link {% if request.path == '/services' %}active{% endif %}" href="/services">
+            <i class="bi bi-gear-wide-connected"></i> Сервисы
+          </a>
+        </li>
+        <li class="nav-item">
           <a class="nav-link {% if request.path == '/groups' %}active{% endif %}" href="/groups">
             <i class="bi bi-collection"></i> Группы
           </a>
+        </li>
+        <li class="nav-item mt-2">
+          <span class="nav-link disabled py-1" style="font-size:.7rem;text-transform:uppercase;letter-spacing:.8px;opacity:.5">Прочее</span>
         </li>
         <li class="nav-item">
           <a class="nav-link {% if request.path == '/logs' %}active{% endif %}" href="/logs">

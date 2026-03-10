@@ -1,0 +1,489 @@
+{% extends "base.html" %}
+{% block title %}Сервисы — Service Portal{% endblock %}
+
+{% block head %}
+<style>
+.group-tag { font-size:.7rem; padding:.15em .5em; border-radius:4px; cursor:default; }
+.group-tag .rm-tag { cursor:pointer; margin-left:.2em; opacity:.6; }
+.group-tag .rm-tag:hover { opacity:1; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h4 class="mb-0"><i class="bi bi-gear-wide-connected me-2"></i>Сервисы</h4>
+  <div class="d-flex gap-2">
+    <select class="form-select form-select-sm" id="filter-server" style="width:180px">
+      <option value="">Все серверы</option>
+    </select>
+    <button class="btn btn-primary" onclick="openAddModal()">
+      <i class="bi bi-plus-lg me-1"></i>Добавить сервис
+    </button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    <div id="loading" class="text-center py-5">
+      <div class="spinner-border text-primary"></div>
+    </div>
+    <div class="table-responsive d-none" id="table-wrap">
+      <table class="table table-hover mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Сервер</th>
+            <th>Системное имя</th>
+            <th>Метка</th>
+            <th>Описание</th>
+            <th>Группы</th>
+            <th class="text-end">Действия</th>
+          </tr>
+        </thead>
+        <tbody id="svcs-tbody"></tbody>
+      </table>
+    </div>
+    <div id="empty-msg" class="text-center py-5 text-muted d-none">
+      <i class="bi bi-gear fs-1 d-block mb-2"></i>
+      Нет настроенных сервисов
+    </div>
+  </div>
+</div>
+
+<!-- ── Add Service Modal ── -->
+<div class="modal fade modal-lg" id="addModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Добавить сервис</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <!-- Left: form -->
+          <div class="col-md-5">
+            <div class="mb-2">
+              <label class="form-label">Сервер <span class="text-danger">*</span></label>
+              <select class="form-select form-select-sm" id="add-server">
+                <option value="">— выберите —</option>
+              </select>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Системное имя <span class="text-danger">*</span></label>
+              <div class="input-group input-group-sm">
+                <input type="text" class="form-control" id="add-svcname" placeholder="Spooler" />
+                <button class="btn btn-outline-secondary" type="button" id="btn-browse"
+                        title="Загрузить список сервисов сервера">
+                  <i class="bi bi-search"></i> Обзор
+                </button>
+              </div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Метка</label>
+              <input type="text" class="form-control form-control-sm" id="add-label"
+                     placeholder="Диспетчер печати" />
+              <div class="form-text">Если пусто — берётся с сервера</div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Описание</label>
+              <input type="text" class="form-control form-control-sm" id="add-desc" />
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Группы</label>
+              <div id="add-groups-wrap" class="d-flex flex-wrap gap-1 p-2 border rounded"
+                   style="min-height:36px">
+                <span class="text-muted small" id="add-groups-hint">Нет выбранных групп</span>
+              </div>
+              <select class="form-select form-select-sm mt-1" id="add-group-pick">
+                <option value="">+ добавить в группу</option>
+              </select>
+            </div>
+            <button class="btn btn-primary w-100" id="btn-add-save">
+              <i class="bi bi-floppy me-1"></i>Сохранить
+            </button>
+          </div>
+          <!-- Right: browse list -->
+          <div class="col-md-7">
+            <div class="fw-semibold small mb-2 text-muted">
+              Список сервисов сервера
+              <span id="browse-hint">(нажмите «Обзор» для загрузки)</span>
+            </div>
+            <input type="text" class="form-control form-control-sm mb-2 d-none"
+                   id="browse-search" placeholder="Поиск..." />
+            <div id="browse-loading" class="text-center py-3 d-none">
+              <div class="spinner-border spinner-border-sm text-primary"></div>
+              <span class="text-muted ms-2">Загрузка...</span>
+            </div>
+            <div style="max-height:360px;overflow-y:auto">
+              <table class="table table-sm table-hover mb-0 d-none" id="browse-table">
+                <thead class="table-light sticky-top">
+                  <tr><th>Системное имя</th><th>Отображаемое имя</th><th>Статус</th><th></th></tr>
+                </thead>
+                <tbody id="browse-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Edit service (label/desc/groups) Modal ── -->
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h5 class="modal-title" id="edit-title">Редактировать сервис</h5>
+          <small class="text-muted font-monospace" id="edit-subtitle"></small>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="edit-cfg-id" />
+        <div class="mb-2">
+          <label class="form-label">Метка</label>
+          <input type="text" class="form-control form-control-sm" id="edit-label" />
+          <div class="form-text">Если пусто — берётся с сервера</div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Описание</label>
+          <input type="text" class="form-control form-control-sm" id="edit-desc" />
+        </div>
+        <div class="mb-1">
+          <label class="form-label">Группы</label>
+          <div id="edit-groups-wrap" class="d-flex flex-wrap gap-1 p-2 border rounded mb-1"
+               style="min-height:36px">
+            <span class="text-muted small" id="edit-groups-hint">Нет групп</span>
+          </div>
+          <select class="form-select form-select-sm" id="edit-group-pick">
+            <option value="">+ добавить в группу</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-primary" id="btn-edit-save">Сохранить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Delete confirm ── -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Удалить сервис</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        Удалить <strong id="del-name"></strong>?
+        Сервис будет удалён из всех групп.
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-danger" id="btn-confirm-del">Удалить</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const addModal    = new bootstrap.Modal(document.getElementById('addModal'));
+const editModal   = new bootstrap.Modal(document.getElementById('editModal'));
+const deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
+
+let allSvcs   = [];   // all service configs from API
+let allGroups = [];   // all groups from /api/groups
+let allServers = [];  // all servers from /api/servers
+let browsedSvcs = []; // services fetched from remote server
+let deleteId  = null;
+let editGroups = [];  // current groups for the edited config
+
+// ── Initialise ────────────────────────────────────────────────────────────────
+async function init() {
+  const [svcsRes, grpsRes, srvRes] = await Promise.all([
+    apiCall('/api/service-configs'),
+    apiCall('/api/groups'),
+    apiCall('/api/servers'),
+  ]);
+  if (svcsRes.ok)  allSvcs    = svcsRes.data;
+  if (grpsRes.ok)  allGroups  = grpsRes.data;
+  if (srvRes.ok)   allServers = srvRes.data;
+
+  populateServerFilter();
+  populateServerSelect();
+  populateGroupPickers();
+  render(allSvcs);
+}
+
+function populateServerFilter() {
+  const sel = document.getElementById('filter-server');
+  sel.innerHTML = '<option value="">Все серверы</option>';
+  allServers.forEach(s => {
+    const o = document.createElement('option');
+    o.value = s.id; o.textContent = s.name; sel.appendChild(o);
+  });
+}
+function populateServerSelect() {
+  const sel = document.getElementById('add-server');
+  sel.innerHTML = '<option value="">— выберите —</option>';
+  allServers.forEach(s => {
+    const o = document.createElement('option');
+    o.value = s.id; o.textContent = `${s.name} (${s.hostname})`; sel.appendChild(o);
+  });
+}
+function populateGroupPickers() {
+  [document.getElementById('add-group-pick'), document.getElementById('edit-group-pick')].forEach(sel => {
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">+ добавить в группу</option>';
+    allGroups.forEach(g => {
+      const o = document.createElement('option');
+      o.value = g.id; o.textContent = g.name; sel.appendChild(o);
+    });
+    sel.value = cur;
+  });
+}
+
+document.getElementById('filter-server').addEventListener('change', function () {
+  const sid = parseInt(this.value);
+  render(sid ? allSvcs.filter(s => s.server_id === sid) : allSvcs);
+});
+
+// ── Render table ──────────────────────────────────────────────────────────────
+function render(list) {
+  document.getElementById('loading').classList.add('d-none');
+  if (!list.length) {
+    document.getElementById('table-wrap').classList.add('d-none');
+    document.getElementById('empty-msg').classList.remove('d-none');
+    return;
+  }
+  document.getElementById('empty-msg').classList.add('d-none');
+  document.getElementById('table-wrap').classList.remove('d-none');
+  document.getElementById('svcs-tbody').innerHTML = list.map(c => `
+    <tr>
+      <td><span class="badge bg-secondary">${esc(c.server_name)}</span></td>
+      <td class="font-monospace small">${esc(c.service_name)}</td>
+      <td>${esc(c.display_name || '')}</td>
+      <td class="small text-muted">${esc(c.description || '')}</td>
+      <td>
+        ${(c.groups || []).map(g =>
+          `<span class="badge bg-${g.color} group-tag me-1">${esc(g.name)}</span>`
+        ).join('') || '<span class="text-muted small">—</span>'}
+      </td>
+      <td class="text-end text-nowrap">
+        <button class="btn btn-sm btn-outline-dark me-1"
+                onclick='openEdit(${JSON.stringify(c)})' title="Редактировать">
+          <i class="bi bi-pencil"></i>
+        </button>
+        <button class="btn btn-sm btn-outline-danger"
+                onclick="confirmDel(${c.id}, '${esc(c.service_name)}')"
+                title="Удалить">
+          <i class="bi bi-trash"></i>
+        </button>
+      </td>
+    </tr>`).join('');
+}
+
+// ── Add modal ─────────────────────────────────────────────────────────────────
+let addGroupIds = new Set();
+
+function openAddModal() {
+  document.getElementById('add-server').value = '';
+  document.getElementById('add-svcname').value = '';
+  document.getElementById('add-label').value = '';
+  document.getElementById('add-desc').value = '';
+  addGroupIds = new Set();
+  renderAddGroups();
+  document.getElementById('browse-table').classList.add('d-none');
+  document.getElementById('browse-search').classList.add('d-none');
+  document.getElementById('browse-hint').textContent = '(нажмите «Обзор» для загрузки)';
+  browsedSvcs = [];
+  addModal.show();
+}
+
+function renderAddGroups() {
+  const wrap = document.getElementById('add-groups-wrap');
+  const hint = document.getElementById('add-groups-hint');
+  if (!addGroupIds.size) { hint.classList.remove('d-none'); return; }
+  hint.classList.add('d-none');
+  const tags = allGroups.filter(g => addGroupIds.has(g.id)).map(g =>
+    `<span class="badge bg-${g.color} group-tag">${esc(g.name)}
+       <span class="rm-tag" onclick="removeAddGroup(${g.id})">✕</span>
+     </span>`
+  ).join('');
+  wrap.innerHTML = tags + `<span class="text-muted small d-none" id="add-groups-hint">Нет выбранных групп</span>`;
+}
+
+window.removeAddGroup = function(gid) { addGroupIds.delete(gid); renderAddGroups(); };
+
+document.getElementById('add-group-pick').addEventListener('change', function () {
+  const gid = parseInt(this.value);
+  if (gid) { addGroupIds.add(gid); renderAddGroups(); }
+  this.value = '';
+});
+
+document.getElementById('btn-add-save').addEventListener('click', async () => {
+  const serverId = parseInt(document.getElementById('add-server').value);
+  const name     = document.getElementById('add-svcname').value.trim();
+  if (!serverId) { showToast('Выберите сервер', 'warning'); return; }
+  if (!name)     { showToast('Введите системное имя', 'warning'); return; }
+
+  const btn = document.getElementById('btn-add-save');
+  btn.disabled = true;
+  const { ok, data } = await apiCall('/api/service-configs', 'POST', {
+    server_id: serverId,
+    service_name: name,
+    display_name: document.getElementById('add-label').value.trim(),
+    description:  document.getElementById('add-desc').value.trim(),
+    group_ids:    Array.from(addGroupIds),
+  });
+  btn.disabled = false;
+  if (ok) {
+    addModal.hide();
+    showToast('Сервис добавлен', 'success');
+    const r = await apiCall('/api/service-configs');
+    if (r.ok) { allSvcs = r.data; render(allSvcs); }
+  } else {
+    showToast(data.error || 'Ошибка', 'danger');
+  }
+});
+
+// Browse remote services
+document.getElementById('btn-browse').addEventListener('click', async () => {
+  const serverId = parseInt(document.getElementById('add-server').value);
+  if (!serverId) { showToast('Сначала выберите сервер', 'warning'); return; }
+  document.getElementById('browse-loading').classList.remove('d-none');
+  document.getElementById('browse-table').classList.add('d-none');
+  document.getElementById('browse-search').classList.add('d-none');
+  document.getElementById('browse-hint').textContent = '';
+  browsedSvcs = [];
+
+  const { ok, data } = await apiCall(`/api/servers/${serverId}/services?all=1`);
+  document.getElementById('browse-loading').classList.add('d-none');
+  if (!ok) { showToast(data.error || 'Ошибка подключения', 'danger'); return; }
+
+  browsedSvcs = data;
+  document.getElementById('browse-search').classList.remove('d-none');
+  document.getElementById('browse-search').value = '';
+  renderBrowse('');
+});
+
+document.getElementById('browse-search').addEventListener('input', function () {
+  renderBrowse(this.value.toLowerCase());
+});
+
+function renderBrowse(q) {
+  const list = browsedSvcs.filter(s =>
+    !q || s.name.toLowerCase().includes(q) || s.display_name.toLowerCase().includes(q)
+  );
+  const tbl = document.getElementById('browse-table');
+  tbl.classList.toggle('d-none', !list.length);
+  document.getElementById('browse-tbody').innerHTML = list.map(s => {
+    const dot = s.status === 'Running' ? '🟢' : '⚪';
+    return `<tr>
+      <td class="font-monospace small">${esc(s.name)}</td>
+      <td class="small">${esc(s.display_name)}</td>
+      <td class="small">${dot} ${esc(s.status)}</td>
+      <td class="text-end">
+        <button class="btn btn-sm btn-outline-primary"
+                onclick="pickBrowsed('${esc(s.name)}','${esc(s.display_name)}')">
+          Выбрать
+        </button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function pickBrowsed(name, label) {
+  document.getElementById('add-svcname').value = name;
+  if (!document.getElementById('add-label').value) {
+    document.getElementById('add-label').value = label;
+  }
+}
+
+// ── Edit modal ────────────────────────────────────────────────────────────────
+let editGroupData = [];   // [{item_id, group_id, name, color}]
+
+function openEdit(c) {
+  document.getElementById('edit-cfg-id').value = c.id;
+  document.getElementById('edit-title').textContent = c.service_name;
+  document.getElementById('edit-subtitle').textContent = c.server_name;
+  document.getElementById('edit-label').value = c.display_name || '';
+  document.getElementById('edit-desc').value  = c.description  || '';
+  editGroupData = c.groups ? [...c.groups] : [];
+  renderEditGroups();
+  editModal.show();
+}
+
+function renderEditGroups() {
+  const wrap = document.getElementById('edit-groups-wrap');
+  const hint = document.getElementById('edit-groups-hint');
+  if (!editGroupData.length) { wrap.innerHTML = ''; hint.classList.remove('d-none'); wrap.appendChild(hint); return; }
+  const tags = editGroupData.map(g =>
+    `<span class="badge bg-${g.color} group-tag">${esc(g.name)}
+       <span class="rm-tag" onclick="removeEditGroup(${g.item_id})">✕</span>
+     </span>`
+  ).join('');
+  wrap.innerHTML = tags;
+}
+
+window.removeEditGroup = async function(itemId) {
+  const item = editGroupData.find(g => g.item_id === itemId);
+  if (!item) return;
+  const { ok } = await apiCall(`/api/groups/${item.group_id}/items/${itemId}`, 'DELETE');
+  if (ok) { editGroupData = editGroupData.filter(g => g.item_id !== itemId); renderEditGroups(); }
+};
+
+document.getElementById('edit-group-pick').addEventListener('change', async function () {
+  const gid = parseInt(this.value); this.value = '';
+  if (!gid) return;
+  const cfgId = parseInt(document.getElementById('edit-cfg-id').value);
+  if (editGroupData.find(g => g.group_id === gid)) { showToast('Уже в этой группе', 'warning'); return; }
+  const { ok, data } = await apiCall(`/api/groups/${gid}/items`, 'POST', { service_config_id: cfgId });
+  if (ok) {
+    const grp = allGroups.find(g => g.id === gid);
+    if (grp) editGroupData.push({ item_id: data.id, group_id: gid, name: grp.name, color: grp.color });
+    renderEditGroups();
+  } else showToast(data.error || 'Ошибка', 'danger');
+});
+
+document.getElementById('btn-edit-save').addEventListener('click', async () => {
+  const cfgId = parseInt(document.getElementById('edit-cfg-id').value);
+  const { ok, data } = await apiCall(`/api/service-configs/${cfgId}`, 'PUT', {
+    display_name: document.getElementById('edit-label').value.trim(),
+    description:  document.getElementById('edit-desc').value.trim(),
+  });
+  if (ok) {
+    editModal.hide();
+    showToast('Сохранено', 'success');
+    const r = await apiCall('/api/service-configs');
+    if (r.ok) { allSvcs = r.data; render(allSvcs); }
+  } else showToast(data.error || 'Ошибка', 'danger');
+});
+
+// ── Delete ────────────────────────────────────────────────────────────────────
+function confirmDel(id, name) {
+  deleteId = id; document.getElementById('del-name').textContent = name; deleteModal.show();
+}
+document.getElementById('btn-confirm-del').addEventListener('click', async () => {
+  const { ok, data } = await apiCall(`/api/service-configs/${deleteId}`, 'DELETE');
+  deleteModal.hide();
+  if (ok) {
+    showToast('Удалено', 'success');
+    allSvcs = allSvcs.filter(s => s.id !== deleteId);
+    render(allSvcs);
+  } else showToast(data.error || 'Ошибка', 'danger');
+});
+
+function esc(str) {
+  const d = document.createElement('div'); d.textContent = str || ''; return d.innerHTML;
+}
+
+init();
+</script>
+{% endblock %}

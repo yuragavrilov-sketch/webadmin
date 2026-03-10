@@ -3,8 +3,8 @@
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
-  <h4 class="mb-0"><i class="bi bi-hdd-network me-2"></i>Управление серверами</h4>
-  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#serverModal" onclick="openAddModal()">
+  <h4 class="mb-0"><i class="bi bi-hdd-network me-2"></i>Серверы</h4>
+  <button class="btn btn-primary" onclick="openAddModal()">
     <i class="bi bi-plus-lg me-1"></i>Добавить сервер
   </button>
 </div>
@@ -19,11 +19,10 @@
         <thead class="table-light">
           <tr>
             <th>Имя</th>
-            <th>Хост</th>
+            <th>Хост / IP</th>
             <th>Порт</th>
             <th>Пользователь</th>
-            <th>SSL</th>
-            <th>Сервисы</th>
+            <th>Протокол</th>
             <th>Описание</th>
             <th class="text-end">Действия</th>
           </tr>
@@ -38,7 +37,7 @@
   </div>
 </div>
 
-<!-- ===================== Add/Edit Server Modal ===================== -->
+<!-- ── Add / Edit Server Modal ── -->
 <div class="modal fade" id="serverModal" tabindex="-1">
   <div class="modal-dialog">
     <div class="modal-content">
@@ -47,47 +46,45 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <form id="server-form" novalidate>
-          <input type="hidden" id="edit-id" />
-          <div class="row g-3">
-            <div class="col-12">
-              <label class="form-label">Имя сервера <span class="text-danger">*</span></label>
-              <input type="text" class="form-control" id="f-name" placeholder="DC01" required />
+        <input type="hidden" id="edit-id" />
+        <div class="row g-3">
+          <div class="col-12">
+            <label class="form-label">Имя <span class="text-danger">*</span></label>
+            <input type="text" class="form-control" id="f-name" placeholder="DC01" />
+          </div>
+          <div class="col-8">
+            <label class="form-label">Хост / IP <span class="text-danger">*</span></label>
+            <input type="text" class="form-control" id="f-hostname" placeholder="192.168.1.10" />
+          </div>
+          <div class="col-4">
+            <label class="form-label">WinRM порт</label>
+            <input type="number" class="form-control" id="f-port" value="5985" min="1" max="65535" />
+          </div>
+          <div class="col-6">
+            <label class="form-label">Пользователь <span class="text-danger">*</span></label>
+            <input type="text" class="form-control" id="f-username" placeholder="DOMAIN\admin" />
+          </div>
+          <div class="col-6">
+            <label class="form-label" id="pass-label">Пароль <span class="text-danger">*</span></label>
+            <div class="input-group">
+              <input type="password" class="form-control" id="f-password" />
+              <button class="btn btn-outline-secondary" type="button" id="toggle-pass">
+                <i class="bi bi-eye"></i>
+              </button>
             </div>
-            <div class="col-8">
-              <label class="form-label">Хост / IP <span class="text-danger">*</span></label>
-              <input type="text" class="form-control" id="f-hostname" placeholder="192.168.1.10" required />
-            </div>
-            <div class="col-4">
-              <label class="form-label">WinRM порт</label>
-              <input type="number" class="form-control" id="f-port" value="5985" min="1" max="65535" />
-            </div>
-            <div class="col-6">
-              <label class="form-label">Пользователь <span class="text-danger">*</span></label>
-              <input type="text" class="form-control" id="f-username" placeholder="DOMAIN\administrator" required />
-            </div>
-            <div class="col-6">
-              <label class="form-label" id="pass-label">Пароль <span class="text-danger">*</span></label>
-              <div class="input-group">
-                <input type="password" class="form-control" id="f-password" />
-                <button class="btn btn-outline-secondary" type="button" id="toggle-pass">
-                  <i class="bi bi-eye"></i>
-                </button>
-              </div>
-              <div class="form-text" id="pass-hint"></div>
-            </div>
-            <div class="col-12">
-              <div class="form-check form-switch">
-                <input class="form-check-input" type="checkbox" id="f-ssl" />
-                <label class="form-check-label" for="f-ssl">Использовать HTTPS (порт 5986)</label>
-              </div>
-            </div>
-            <div class="col-12">
-              <label class="form-label">Описание</label>
-              <input type="text" class="form-control" id="f-description" />
+            <div class="form-text" id="pass-hint"></div>
+          </div>
+          <div class="col-12">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="f-ssl" />
+              <label class="form-check-label" for="f-ssl">HTTPS / SSL (порт 5986)</label>
             </div>
           </div>
-        </form>
+          <div class="col-12">
+            <label class="form-label">Описание</label>
+            <input type="text" class="form-control" id="f-description" />
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
@@ -99,127 +96,7 @@
   </div>
 </div>
 
-<!-- ===================== Service Configs Modal ===================== -->
-<div class="modal fade modal-xl" id="svcConfigModal" tabindex="-1">
-  <div class="modal-dialog modal-xl">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title">
-          <i class="bi bi-gear me-2"></i>Настройка сервисов:
-          <span id="cfg-server-name" class="text-primary"></span>
-        </h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body">
-        <div class="row g-3">
-
-          <!-- Left: configured list -->
-          <div class="col-md-7">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-              <span class="fw-semibold">Настроенные сервисы</span>
-              <span class="text-muted small" id="cfg-count"></span>
-            </div>
-            <div id="cfg-loading" class="text-center py-3 d-none">
-              <div class="spinner-border spinner-border-sm text-primary"></div>
-            </div>
-            <div id="cfg-empty" class="text-center text-muted py-3 d-none">
-              <i class="bi bi-inbox fs-3 d-block mb-1"></i>
-              Нет настроенных сервисов
-            </div>
-            <div class="table-responsive">
-              <table class="table table-sm table-hover mb-0" id="cfg-table">
-                <thead class="table-light">
-                  <tr>
-                    <th>Системное имя</th>
-                    <th>Метка</th>
-                    <th>Описание</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody id="cfg-tbody"></tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Right: add form + browse -->
-          <div class="col-md-5">
-            <div class="card border">
-              <div class="card-header fw-semibold py-2">Добавить сервис</div>
-              <div class="card-body">
-                <div class="mb-2">
-                  <label class="form-label small mb-1">Системное имя <span class="text-danger">*</span></label>
-                  <div class="input-group input-group-sm">
-                    <input type="text" class="form-control" id="new-svc-name" placeholder="Spooler" />
-                    <button class="btn btn-outline-secondary" type="button" id="btn-browse-svcs" title="Выбрать из списка сервисов сервера">
-                      <i class="bi bi-search"></i>
-                    </button>
-                  </div>
-                  <div class="form-text">Точное имя Windows-сервиса</div>
-                </div>
-                <div class="mb-2">
-                  <label class="form-label small mb-1">Метка (необязательно)</label>
-                  <input type="text" class="form-control form-control-sm" id="new-svc-label" placeholder="Диспетчер печати" />
-                  <div class="form-text">Отображаемое имя (если пусто — берётся с сервера)</div>
-                </div>
-                <div class="mb-2">
-                  <label class="form-label small mb-1">Описание</label>
-                  <input type="text" class="form-control form-control-sm" id="new-svc-desc" />
-                </div>
-                <div class="mb-3">
-                  <label class="form-label small mb-1">
-                    <i class="bi bi-collection me-1 text-muted"></i>Добавить в группу
-                  </label>
-                  <select class="form-select form-select-sm" id="new-svc-group">
-                    <option value="">— без группы —</option>
-                  </select>
-                  <div id="new-svc-group-loading" class="form-text d-none">
-                    <div class="spinner-border spinner-border-sm me-1"></div>Загрузка групп...
-                  </div>
-                </div>
-                <button class="btn btn-primary btn-sm w-100" id="btn-add-svc">
-                  <i class="bi bi-plus-lg me-1"></i>Добавить
-                </button>
-              </div>
-            </div>
-          </div>
-
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ===================== Browse Remote Services Modal ===================== -->
-<div class="modal fade" id="browseModal" tabindex="-1" style="z-index:1060">
-  <div class="modal-dialog modal-lg modal-dialog-scrollable">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title"><i class="bi bi-search me-2"></i>Выбрать сервис</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body">
-        <input type="text" class="form-control mb-3" id="browse-search" placeholder="Поиск..." />
-        <div id="browse-loading" class="text-center py-4 d-none">
-          <div class="spinner-border text-primary"></div>
-          <p class="mt-2 text-muted">Загрузка сервисов с сервера...</p>
-        </div>
-        <div class="table-responsive">
-          <table class="table table-sm table-hover" id="browse-table" style="display:none">
-            <thead class="table-light">
-              <tr><th>Системное имя</th><th>Отображаемое имя</th><th>Статус</th><th></th></tr>
-            </thead>
-            <tbody id="browse-tbody"></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Delete Confirm Modal -->
+<!-- ── Delete confirm ── -->
 <div class="modal fade" id="deleteModal" tabindex="-1">
   <div class="modal-dialog modal-sm">
     <div class="modal-content">
@@ -228,7 +105,8 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        Удалить <strong id="del-name"></strong>? Все настройки сервисов и логи будут удалены.
+        Удалить <strong id="del-name"></strong>?
+        Все настроенные сервисы и логи будут удалены.
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
@@ -242,48 +120,47 @@
 {% block scripts %}
 <script>
 let deleteId = null;
-let cfgServerId = null;
-let allBrowsed = [];
+const serverModal = new bootstrap.Modal(document.getElementById('serverModal'));
+const deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
 
-const serverModal   = new bootstrap.Modal(document.getElementById('serverModal'));
-const svcConfigModal = new bootstrap.Modal(document.getElementById('svcConfigModal'));
-const browseModal   = new bootstrap.Modal(document.getElementById('browseModal'));
-const deleteModal   = new bootstrap.Modal(document.getElementById('deleteModal'));
-
-// ── SSL auto-port ────────────────────────────────────────────────────────────
+// SSL auto-port
 document.getElementById('f-ssl').addEventListener('change', function () {
   document.getElementById('f-port').value = this.checked ? 5986 : 5985;
 });
 
-// ── Password visibility ──────────────────────────────────────────────────────
+// Password visibility
 document.getElementById('toggle-pass').addEventListener('click', function () {
   const inp = document.getElementById('f-password');
-  const ico = this.querySelector('i');
   inp.type = inp.type === 'password' ? 'text' : 'password';
-  ico.className = inp.type === 'text' ? 'bi bi-eye-slash' : 'bi bi-eye';
+  this.querySelector('i').className = inp.type === 'text' ? 'bi bi-eye-slash' : 'bi bi-eye';
 });
 
-// ── Server CRUD ──────────────────────────────────────────────────────────────
 function openAddModal() {
   document.getElementById('modal-title').textContent = 'Добавить сервер';
   document.getElementById('edit-id').value = '';
-  document.getElementById('server-form').reset();
+  document.getElementById('f-name').value = '';
+  document.getElementById('f-hostname').value = '';
   document.getElementById('f-port').value = 5985;
+  document.getElementById('f-username').value = '';
+  document.getElementById('f-password').value = '';
+  document.getElementById('f-ssl').checked = false;
+  document.getElementById('f-description').value = '';
   document.getElementById('pass-label').innerHTML = 'Пароль <span class="text-danger">*</span>';
   document.getElementById('pass-hint').textContent = '';
   document.getElementById('f-password').required = true;
+  serverModal.show();
 }
 
-function openEditModal(server) {
+function openEditModal(s) {
   document.getElementById('modal-title').textContent = 'Редактировать сервер';
-  document.getElementById('edit-id').value = server.id;
-  document.getElementById('f-name').value = server.name;
-  document.getElementById('f-hostname').value = server.hostname;
-  document.getElementById('f-port').value = server.port;
-  document.getElementById('f-username').value = server.username;
+  document.getElementById('edit-id').value = s.id;
+  document.getElementById('f-name').value = s.name;
+  document.getElementById('f-hostname').value = s.hostname;
+  document.getElementById('f-port').value = s.port;
+  document.getElementById('f-username').value = s.username;
   document.getElementById('f-password').value = '';
-  document.getElementById('f-ssl').checked = server.use_ssl;
-  document.getElementById('f-description').value = server.description || '';
+  document.getElementById('f-ssl').checked = s.use_ssl;
+  document.getElementById('f-description').value = s.description || '';
   document.getElementById('pass-label').textContent = 'Пароль';
   document.getElementById('pass-hint').textContent = 'Оставьте пустым, чтобы не менять';
   document.getElementById('f-password').required = false;
@@ -301,21 +178,28 @@ document.getElementById('btn-save').addEventListener('click', async () => {
     use_ssl: document.getElementById('f-ssl').checked,
     description: document.getElementById('f-description').value.trim(),
   };
-  if (!body.name || !body.hostname || !body.username) { showToast('Заполните обязательные поля', 'warning'); return; }
+  if (!body.name || !body.hostname || !body.username) {
+    showToast('Заполните обязательные поля', 'warning'); return;
+  }
   if (!id && !body.password) { showToast('Введите пароль', 'warning'); return; }
 
   const btn = document.getElementById('btn-save');
   btn.disabled = true;
-  const { ok, data } = await apiCall(id ? `/api/servers/${id}` : '/api/servers', id ? 'PUT' : 'POST', body);
+  const { ok, data } = await apiCall(
+    id ? `/api/servers/${id}` : '/api/servers',
+    id ? 'PUT' : 'POST', body
+  );
   btn.disabled = false;
-  if (ok) { serverModal.hide(); showToast(id ? 'Сервер обновлён' : 'Сервер добавлен', 'success'); await loadServers(); }
-  else showToast(data.error || 'Ошибка сохранения', 'danger');
+  if (ok) { serverModal.hide(); showToast(id ? 'Обновлено' : 'Сервер добавлен', 'success'); await loadServers(); }
+  else showToast(data.error || 'Ошибка', 'danger');
 });
 
 async function testConn(id, btn) {
-  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-  const { ok, data } = await apiCall(`/api/servers/${id}/test`, 'POST');
-  btn.disabled = false; btn.innerHTML = '<i class="bi bi-plug"></i>';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  const { data } = await apiCall(`/api/servers/${id}/test`, 'POST');
+  btn.disabled = false;
+  btn.innerHTML = '<i class="bi bi-plug"></i>';
   showToast(data.message, data.success ? 'success' : 'danger');
 }
 
@@ -326,172 +210,12 @@ function confirmDelete(id, name) {
 }
 
 document.getElementById('btn-confirm-delete').addEventListener('click', async () => {
-  if (!deleteId) return;
   const { ok, data } = await apiCall(`/api/servers/${deleteId}`, 'DELETE');
   deleteModal.hide();
   if (ok) { showToast('Сервер удалён', 'success'); await loadServers(); }
   else showToast(data.error || 'Ошибка', 'danger');
 });
 
-// ── Service Configs ──────────────────────────────────────────────────────────
-async function openServiceConfigs(serverId, serverName) {
-  cfgServerId = serverId;
-  document.getElementById('cfg-server-name').textContent = serverName;
-  document.getElementById('new-svc-name').value = '';
-  document.getElementById('new-svc-label').value = '';
-  document.getElementById('new-svc-desc').value = '';
-  document.getElementById('new-svc-group').value = '';
-  svcConfigModal.show();
-  await Promise.all([loadConfigs(), loadGroupsSelect()]);
-}
-
-async function loadGroupsSelect() {
-  const sel = document.getElementById('new-svc-group');
-  const hint = document.getElementById('new-svc-group-loading');
-  hint.classList.remove('d-none');
-  const { ok, data } = await apiCall('/api/groups');
-  hint.classList.add('d-none');
-  if (!ok) return;
-  // Keep the first "—без группы—" option, rebuild the rest
-  sel.innerHTML = '<option value="">— без группы —</option>';
-  data.forEach(g => {
-    const opt = document.createElement('option');
-    opt.value = g.id;
-    opt.textContent = g.name;
-    sel.appendChild(opt);
-  });
-}
-
-async function loadConfigs() {
-  document.getElementById('cfg-loading').classList.remove('d-none');
-  document.getElementById('cfg-table').classList.add('d-none');
-  document.getElementById('cfg-empty').classList.add('d-none');
-
-  const { ok, data } = await apiCall(`/api/servers/${cfgServerId}/service-configs`);
-  document.getElementById('cfg-loading').classList.add('d-none');
-
-  if (!ok) { showToast('Ошибка загрузки конфигурации', 'danger'); return; }
-
-  document.getElementById('cfg-count').textContent = data.length ? `(${data.length})` : '';
-  if (!data.length) { document.getElementById('cfg-empty').classList.remove('d-none'); return; }
-
-  document.getElementById('cfg-table').classList.remove('d-none');
-  document.getElementById('cfg-tbody').innerHTML = data.map((c, idx) => `
-    <tr id="cfg-row-${c.id}">
-      <td class="font-monospace small align-middle">${esc(c.service_name)}</td>
-      <td class="align-middle">
-        <input type="text" class="form-control form-control-sm" value="${esc(c.display_name)}"
-          onblur="updateCfgField(${c.id}, 'display_name', this.value)" placeholder="(авто)" />
-      </td>
-      <td class="align-middle">
-        <input type="text" class="form-control form-control-sm" value="${esc(c.description)}"
-          onblur="updateCfgField(${c.id}, 'description', this.value)" />
-      </td>
-      <td class="align-middle text-end">
-        <button class="btn btn-sm btn-outline-danger" onclick="deleteCfg(${c.id})" title="Удалить">
-          <i class="bi bi-x-lg"></i>
-        </button>
-      </td>
-    </tr>`).join('');
-}
-
-async function updateCfgField(cfgId, field, value) {
-  await apiCall(`/api/servers/${cfgServerId}/service-configs/${cfgId}`, 'PUT', { [field]: value });
-}
-
-async function deleteCfg(cfgId) {
-  const { ok } = await apiCall(`/api/servers/${cfgServerId}/service-configs/${cfgId}`, 'DELETE');
-  if (ok) {
-    document.getElementById(`cfg-row-${cfgId}`)?.remove();
-    await loadConfigs();
-  }
-}
-
-document.getElementById('btn-add-svc').addEventListener('click', async () => {
-  const name = document.getElementById('new-svc-name').value.trim();
-  if (!name) { showToast('Введите системное имя сервиса', 'warning'); return; }
-
-  const groupId = document.getElementById('new-svc-group').value;
-  const body = {
-    service_name: name,
-    display_name: document.getElementById('new-svc-label').value.trim(),
-    description: document.getElementById('new-svc-desc').value.trim(),
-  };
-  const btn = document.getElementById('btn-add-svc');
-  btn.disabled = true;
-  const { ok, data } = await apiCall(`/api/servers/${cfgServerId}/service-configs`, 'POST', body);
-  btn.disabled = false;
-  if (ok) {
-    // Optionally assign to group
-    if (groupId && data.id) {
-      const { ok: gOk, data: gData } = await apiCall(
-        `/api/groups/${groupId}/items`, 'POST', { service_config_id: data.id }
-      );
-      if (!gOk) showToast(`Сервис добавлен, но не удалось назначить группу: ${gData.error}`, 'warning');
-      else {
-        const groupName = document.getElementById('new-svc-group').selectedOptions[0]?.text || '';
-        showToast(`Сервис добавлен и назначен в группу «${groupName}»`, 'success');
-      }
-    }
-    document.getElementById('new-svc-name').value = '';
-    document.getElementById('new-svc-label').value = '';
-    document.getElementById('new-svc-desc').value = '';
-    document.getElementById('new-svc-group').value = '';
-    await loadConfigs();
-  } else {
-    showToast(data.error || 'Ошибка', 'danger');
-  }
-});
-
-// ── Browse remote services ───────────────────────────────────────────────────
-document.getElementById('btn-browse-svcs').addEventListener('click', async () => {
-  browseModal.show();
-  document.getElementById('browse-search').value = '';
-  document.getElementById('browse-tbody').innerHTML = '';
-  document.getElementById('browse-table').style.display = 'none';
-  document.getElementById('browse-loading').classList.remove('d-none');
-
-  const { ok, data } = await apiCall(`/api/servers/${cfgServerId}/services?all=1`);
-  document.getElementById('browse-loading').classList.add('d-none');
-
-  if (!ok) { showToast('Не удалось загрузить сервисы: ' + (data.error || ''), 'danger'); return; }
-
-  allBrowsed = data;
-  renderBrowse(data);
-});
-
-function renderBrowse(list) {
-  document.getElementById('browse-table').style.display = list.length ? '' : 'none';
-  const statusBadge = s => s === 'Running'
-    ? '<span class="badge bg-success">Running</span>'
-    : `<span class="badge bg-secondary">${esc(s)}</span>`;
-  document.getElementById('browse-tbody').innerHTML = list.map(s => `
-    <tr>
-      <td class="font-monospace small">${esc(s.name)}</td>
-      <td>${esc(s.display_name)}</td>
-      <td>${statusBadge(s.status)}</td>
-      <td class="text-end">
-        <button class="btn btn-sm btn-outline-primary" onclick="pickService('${esc(s.name)}', '${esc(s.display_name)}')">
-          Выбрать
-        </button>
-      </td>
-    </tr>`).join('');
-}
-
-document.getElementById('browse-search').addEventListener('input', function () {
-  const q = this.value.toLowerCase();
-  renderBrowse(allBrowsed.filter(s => s.name.toLowerCase().includes(q) || s.display_name.toLowerCase().includes(q)));
-});
-
-function pickService(name, displayName) {
-  document.getElementById('new-svc-name').value = name;
-  if (!document.getElementById('new-svc-label').value) {
-    document.getElementById('new-svc-label').value = displayName;
-  }
-  browseModal.hide();
-}
-
-// ── Servers table ────────────────────────────────────────────────────────────
 function renderServers(list) {
   document.getElementById('loading').classList.add('d-none');
   if (!list.length) {
@@ -505,24 +229,23 @@ function renderServers(list) {
       <td class="font-monospace small">${esc(s.hostname)}</td>
       <td>${s.port}</td>
       <td class="small">${esc(s.username)}</td>
-      <td>${s.use_ssl ? '<span class="badge bg-success">HTTPS</span>' : '<span class="badge bg-secondary">HTTP</span>'}</td>
       <td>
-        <button class="btn btn-sm btn-outline-primary" onclick="openServiceConfigs(${s.id}, '${esc(s.name)}')">
-          <i class="bi bi-gear me-1"></i>Сервисы
-        </button>
+        ${s.use_ssl
+          ? '<span class="badge bg-success">HTTPS</span>'
+          : '<span class="badge bg-secondary">HTTP</span>'}
       </td>
       <td class="text-muted small">${esc(s.description || '')}</td>
       <td class="text-end text-nowrap">
-        <button class="btn btn-sm btn-outline-secondary me-1" onclick="testConn(${s.id}, this)" title="Тест соединения">
+        <button class="btn btn-sm btn-outline-secondary me-1"
+                onclick="testConn(${s.id}, this)" title="Тест соединения">
           <i class="bi bi-plug"></i>
         </button>
-        <a href="/?server=${s.id}" class="btn btn-sm btn-outline-success me-1" title="Управление">
-          <i class="bi bi-play-circle"></i>
-        </a>
-        <button class="btn btn-sm btn-outline-dark me-1" onclick='openEditModal(${JSON.stringify(s)})'>
+        <button class="btn btn-sm btn-outline-dark me-1"
+                onclick='openEditModal(${JSON.stringify(s)})'>
           <i class="bi bi-pencil"></i>
         </button>
-        <button class="btn btn-sm btn-outline-danger" onclick="confirmDelete(${s.id}, '${esc(s.name)}')">
+        <button class="btn btn-sm btn-outline-danger"
+                onclick="confirmDelete(${s.id}, '${esc(s.name)}')">
           <i class="bi bi-trash"></i>
         </button>
       </td>
@@ -536,9 +259,7 @@ async function loadServers() {
 }
 
 function esc(str) {
-  const d = document.createElement('div');
-  d.textContent = str || '';
-  return d.innerHTML;
+  const d = document.createElement('div'); d.textContent = str || ''; return d.innerHTML;
 }
 
 loadServers();
