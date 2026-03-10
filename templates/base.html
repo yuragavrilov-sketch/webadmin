@@ -65,6 +65,11 @@
           <span class="nav-link disabled py-1" style="font-size:.7rem;text-transform:uppercase;letter-spacing:.8px;opacity:.5">Прочее</span>
         </li>
         <li class="nav-item">
+          <a class="nav-link {% if request.path == '/configs' %}active{% endif %}" href="/configs">
+            <i class="bi bi-archive"></i> Конфигурации
+          </a>
+        </li>
+        <li class="nav-item">
           <a class="nav-link {% if request.path == '/logs' %}active{% endif %}" href="/logs">
             <i class="bi bi-journal-text"></i> Журнал
           </a>

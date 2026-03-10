@@ -1,0 +1,515 @@
+{% extends "base.html" %}
+{% block title %}Конфигурации — Service Portal{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html@3.4.47/bundles/css/diff2html.min.css" />
+<style>
+/* ── Layout ── */
+.cfg-panel { min-height: calc(100vh - 120px); }
+.svc-list-item { cursor:pointer; border-radius:6px; padding:.45rem .75rem; margin:.1rem 0; transition:background .1s; }
+.svc-list-item:hover { background:#e9ecef; }
+.svc-list-item.active { background:#0d6efd; color:#fff; }
+.svc-list-item.active .text-muted { color:#c5d4f5 !important; }
+.svc-list-item .cfg-dot { font-size:.55rem; vertical-align:middle; }
+.snap-row { cursor:pointer; }
+.snap-row:hover td { background:#f8f9fa; }
+.snap-row.active td { background:#e8f0fe; }
+.file-tab { cursor:pointer; font-size:.82rem; padding:.25rem .7rem; border-radius:4px; transition:background .1s; }
+.file-tab:hover { background:#e9ecef; }
+.file-tab.active { background:#0d6efd; color:#fff; }
+.code-view { font-family:monospace; font-size:.8rem; white-space:pre-wrap; word-break:break-all;
+             background:#1e1e1e; color:#d4d4d4; border-radius:6px; padding:1rem;
+             max-height:480px; overflow-y:auto; }
+.sched-badge { font-size:.75rem; }
+/* diff2html overrides */
+.d2h-wrapper { font-size:.8rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-archive me-2"></i>Конфигурации сервисов</h4>
+  <div id="sched-status" class="d-flex align-items-center gap-2 small text-muted">
+    <span id="sched-badge"></span>
+    <button class="btn btn-sm btn-outline-secondary" onclick="runNow()" id="btn-run-now" title="Опросить сейчас">
+      <i class="bi bi-arrow-clockwise"></i> Запустить опрос
+    </button>
+  </div>
+</div>
+
+<div class="row g-3">
+  <!-- ── Left: service list ── -->
+  <div class="col-md-3">
+    <div class="card cfg-panel">
+      <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <span>Сервисы</span>
+        <span class="badge bg-secondary" id="svc-count">0</span>
+      </div>
+      <div class="card-body p-2">
+        <input class="form-control form-control-sm mb-2" id="svc-search" placeholder="Поиск...">
+        <div id="svc-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Right: detail ── -->
+  <div class="col-md-9">
+    <div id="right-empty" class="card cfg-panel d-flex align-items-center justify-content-center text-muted">
+      <div class="text-center">
+        <i class="bi bi-arrow-left-circle fs-1 d-block mb-2"></i>
+        Выберите сервис слева
+      </div>
+    </div>
+
+    <div id="right-panel" class="d-none">
+      <!-- Service header -->
+      <div class="card mb-3">
+        <div class="card-body py-2 px-3">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <span class="fw-semibold font-monospace" id="rp-svcname"></span>
+              <span class="badge bg-secondary ms-2" id="rp-server"></span>
+            </div>
+            <div class="d-flex gap-2 align-items-center">
+              <button class="btn btn-sm btn-success" id="btn-snap-now" onclick="snapNow()">
+                <i class="bi bi-camera me-1"></i>Снять снапшот
+              </button>
+            </div>
+          </div>
+
+          <!-- Config dir row -->
+          <div class="mt-2 d-flex gap-2 align-items-center">
+            <label class="small text-muted text-nowrap mb-0">Config dir:</label>
+            <input class="form-control form-control-sm font-monospace" id="rp-config-dir"
+                   placeholder="C:\App\MyService\Config" style="font-size:.78rem"/>
+            <button class="btn btn-sm btn-outline-secondary text-nowrap" onclick="detectConfigDir()" id="btn-detect" title="Авто-определить по пути exe">
+              <i class="bi bi-search"></i>
+            </button>
+            <button class="btn btn-sm btn-outline-primary text-nowrap" onclick="saveConfigDir()">
+              <i class="bi bi-floppy"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Snapshot list + file viewer side-by-side -->
+      <div class="row g-3">
+        <!-- Snapshot timeline -->
+        <div class="col-md-5">
+          <div class="card">
+            <div class="card-header py-2 d-flex justify-content-between align-items-center">
+              <span>История версий</span>
+              <span class="badge bg-secondary" id="snap-count">0</span>
+            </div>
+            <div class="card-body p-0" style="max-height:520px;overflow-y:auto">
+              <div id="snap-loading" class="text-center py-3 d-none">
+                <div class="spinner-border spinner-border-sm text-primary"></div>
+              </div>
+              <div id="snap-empty" class="text-center py-4 text-muted small d-none">
+                Снапшотов нет
+              </div>
+              <table class="table table-sm table-hover mb-0" id="snap-table">
+                <tbody id="snap-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- File viewer -->
+        <div class="col-md-7">
+          <div class="card">
+            <div class="card-header py-2">
+              <div id="file-tabs" class="d-flex flex-wrap gap-1">
+                <span class="text-muted small">Выберите версию</span>
+              </div>
+            </div>
+            <div class="card-body p-2">
+              <div id="file-content-wrap">
+                <div class="text-muted small text-center py-5" id="file-placeholder">
+                  <i class="bi bi-file-code fs-1 d-block mb-1"></i>
+                  Выберите снапшот и файл
+                </div>
+                <pre class="code-view d-none" id="file-content"></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Diff modal ── -->
+<div class="modal fade modal-xl" id="diffModal" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <div>
+          <h6 class="modal-title mb-0" id="diff-title">Diff</h6>
+          <small class="text-muted" id="diff-subtitle"></small>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-2">
+        <!-- file picker inside diff modal -->
+        <div class="mb-2 d-flex gap-2 align-items-center">
+          <label class="small text-muted text-nowrap mb-0">Файл:</label>
+          <select class="form-select form-select-sm" id="diff-file-select" style="max-width:300px" onchange="renderDiff()"></select>
+        </div>
+        <div id="diff-output"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Delete snapshot confirm ── -->
+<div class="modal fade" id="delSnapModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title">Удалить снапшот?</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body small">Удалить <strong id="del-snap-label"></strong>?</div>
+      <div class="modal-footer py-1">
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-sm btn-danger" id="btn-confirm-del-snap">Удалить</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/diff@5.2.0/dist/diff.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/diff2html@3.4.47/bundles/js/diff2html.min.js"></script>
+<script>
+const diffModal    = new bootstrap.Modal(document.getElementById('diffModal'));
+const delSnapModal = new bootstrap.Modal(document.getElementById('delSnapModal'));
+
+let allSvcs      = [];
+let selectedCfg  = null;   // {id, service_name, server_name, server_id, config_dir, ...}
+let snapshots    = [];     // latest-first list
+let selectedSnap = null;   // {id, comment, created_at, files:[]}
+let diffSnapA    = null;   // snap object with .files
+let diffSnapB    = null;
+let delSnapId    = null;
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function init() {
+  await Promise.all([loadServices(), loadSchedulerStatus()]);
+}
+
+async function loadServices() {
+  const { ok, data } = await apiCall('/api/service-configs');
+  if (!ok) return;
+  // Enrich with server_name (already present from API)
+  allSvcs = data;
+  document.getElementById('svc-count').textContent = allSvcs.length;
+  renderSvcList('');
+}
+
+async function loadSchedulerStatus() {
+  const { ok, data } = await apiCall('/api/scheduler/status');
+  if (!ok) return;
+  const badge = document.getElementById('sched-badge');
+  if (data.running) {
+    const next = data.next_run ? new Date(data.next_run).toLocaleTimeString('ru') : '—';
+    badge.innerHTML = `<span class="badge bg-success sched-badge"><i class="bi bi-clock-history me-1"></i>Шедулер активен · ${data.interval_minutes} мин · след. ${next}</span>`;
+    if (data.last_run && data.last_run.started_at) {
+      const lr = data.last_run;
+      badge.innerHTML += ` <span class="text-muted">последний запуск: +${lr.snapshots_created} снапш., ${lr.errors} ошибок</span>`;
+    }
+  } else {
+    badge.innerHTML = `<span class="badge bg-secondary sched-badge">Шедулер не запущен</span>`;
+  }
+}
+
+// ── Service list ──────────────────────────────────────────────────────────────
+document.getElementById('svc-search').addEventListener('input', function() {
+  renderSvcList(this.value.toLowerCase());
+});
+
+function renderSvcList(q) {
+  const filtered = allSvcs.filter(s =>
+    !q || s.service_name.toLowerCase().includes(q) || (s.server_name||'').toLowerCase().includes(q)
+  );
+  document.getElementById('svc-list').innerHTML = filtered.map(s => {
+    const hasDir = !!s.config_dir;
+    const active = selectedCfg && selectedCfg.id === s.id ? 'active' : '';
+    return `<div class="svc-list-item ${active}" onclick="selectService(${s.id})">
+      <div class="d-flex justify-content-between align-items-center">
+        <span class="small fw-semibold">${esc(s.service_name)}</span>
+        <i class="bi bi-${hasDir ? 'folder-check text-success' : 'folder-x text-danger'} cfg-dot small"></i>
+      </div>
+      <div class="text-muted" style="font-size:.72rem">${esc(s.server_name||'')}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Select service ────────────────────────────────────────────────────────────
+async function selectService(cfgId) {
+  selectedCfg = allSvcs.find(s => s.id === cfgId);
+  if (!selectedCfg) return;
+  renderSvcList(document.getElementById('svc-search').value.toLowerCase());
+
+  document.getElementById('right-empty').classList.add('d-none');
+  document.getElementById('right-panel').classList.remove('d-none');
+
+  document.getElementById('rp-svcname').textContent = selectedCfg.service_name;
+  document.getElementById('rp-server').textContent  = selectedCfg.server_name || '';
+  document.getElementById('rp-config-dir').value    = selectedCfg.config_dir || '';
+
+  // Reset right side
+  selectedSnap = null;
+  document.getElementById('file-tabs').innerHTML = '<span class="text-muted small">Выберите версию</span>';
+  document.getElementById('file-placeholder').classList.remove('d-none');
+  document.getElementById('file-content').classList.add('d-none');
+
+  await loadSnapshots();
+}
+
+// ── Config dir ────────────────────────────────────────────────────────────────
+async function detectConfigDir() {
+  if (!selectedCfg) return;
+  const btn = document.getElementById('btn-detect');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  const { ok, data } = await apiCall(`/api/service-configs/${selectedCfg.id}/detect-config-dir`, 'POST');
+  btn.disabled = false; btn.innerHTML = '<i class="bi bi-search"></i>';
+  if (ok && data.config_dir) {
+    document.getElementById('rp-config-dir').value = data.config_dir;
+    showToast('Определено: ' + data.config_dir, 'success');
+  } else {
+    showToast(data.error || 'Папка Config/ не найдена', 'warning');
+  }
+}
+
+async function saveConfigDir() {
+  if (!selectedCfg) return;
+  const dir = document.getElementById('rp-config-dir').value.trim();
+  const { ok, data } = await apiCall(`/api/service-configs/${selectedCfg.id}/config-dir`, 'PUT', { config_dir: dir });
+  if (ok) {
+    selectedCfg.config_dir = data.config_dir;
+    // update in allSvcs
+    const idx = allSvcs.findIndex(s => s.id === selectedCfg.id);
+    if (idx >= 0) allSvcs[idx].config_dir = data.config_dir;
+    renderSvcList(document.getElementById('svc-search').value.toLowerCase());
+    showToast('Config dir сохранён', 'success');
+  } else showToast(data.error || 'Ошибка', 'danger');
+}
+
+// ── Snapshots ─────────────────────────────────────────────────────────────────
+async function loadSnapshots() {
+  if (!selectedCfg) return;
+  const tbody = document.getElementById('snap-tbody');
+  document.getElementById('snap-loading').classList.remove('d-none');
+  document.getElementById('snap-empty').classList.add('d-none');
+  tbody.innerHTML = '';
+
+  const { ok, data } = await apiCall(`/api/service-configs/${selectedCfg.id}/snapshots`);
+  document.getElementById('snap-loading').classList.add('d-none');
+  if (!ok) { showToast(data.error || 'Ошибка загрузки', 'danger'); return; }
+
+  snapshots = data;
+  document.getElementById('snap-count').textContent = snapshots.length;
+  if (!snapshots.length) {
+    document.getElementById('snap-empty').classList.remove('d-none');
+    return;
+  }
+
+  tbody.innerHTML = snapshots.map((s, i) => {
+    const dt   = new Date(s.created_at).toLocaleString('ru');
+    const src  = commentBadge(s.comment);
+    const hasPrev = i < snapshots.length - 1;
+    return `<tr class="snap-row" id="snap-row-${s.id}" onclick="selectSnap(${s.id})">
+      <td class="ps-3 py-2">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <div class="small fw-semibold">${dt}</div>
+            <div>${src} <span class="text-muted small">${s.file_count} файл(а)</span></div>
+          </div>
+          <div class="d-flex gap-1 ms-2">
+            ${hasPrev ? `<button class="btn btn-xs btn-outline-info" style="font-size:.7rem;padding:.1rem .35rem"
+                onclick="event.stopPropagation();openDiff(${s.id}, ${snapshots[i+1].id})">
+                <i class="bi bi-subtract"></i> Diff
+              </button>` : ''}
+            <button class="btn btn-xs btn-outline-danger" style="font-size:.7rem;padding:.1rem .35rem"
+                onclick="event.stopPropagation();confirmDelSnap(${s.id}, '${dt}')">
+              <i class="bi bi-trash"></i>
+            </button>
+          </div>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function commentBadge(comment) {
+  if (!comment) return '';
+  if (comment === 'auto')   return '<span class="badge bg-secondary" style="font-size:.65rem">авто</span>';
+  if (comment === 'manual') return '<span class="badge bg-primary"   style="font-size:.65rem">ручной</span>';
+  if (comment.startsWith('pre-action:')) {
+    const act = comment.split(':')[1];
+    const colors = {start:'success', stop:'warning', restart:'info'};
+    return `<span class="badge bg-${colors[act]||'secondary'}" style="font-size:.65rem">до ${act}</span>`;
+  }
+  return `<span class="badge bg-light text-dark" style="font-size:.65rem">${esc(comment)}</span>`;
+}
+
+// ── Select snapshot → show files ──────────────────────────────────────────────
+async function selectSnap(snapId) {
+  // Highlight row
+  document.querySelectorAll('.snap-row').forEach(r => r.classList.remove('active'));
+  const row = document.getElementById('snap-row-' + snapId);
+  if (row) row.classList.add('active');
+
+  // Load files if not cached
+  const meta = snapshots.find(s => s.id === snapId);
+  if (!meta) return;
+  if (meta.files) {
+    selectedSnap = meta;
+    renderFileTabs();
+    return;
+  }
+
+  const { ok, data } = await apiCall(`/api/service-configs/${selectedCfg.id}/snapshots/${snapId}`);
+  if (!ok) { showToast(data.error || 'Ошибка', 'danger'); return; }
+  meta.files = data.files;
+  selectedSnap = meta;
+  renderFileTabs();
+}
+
+function renderFileTabs() {
+  const files = selectedSnap?.files || [];
+  const dt    = selectedSnap ? new Date(selectedSnap.created_at).toLocaleString('ru') : '';
+  const tabs  = document.getElementById('file-tabs');
+  if (!files.length) {
+    tabs.innerHTML = `<span class="text-muted small">${dt} — нет файлов</span>`;
+    return;
+  }
+  tabs.innerHTML = `<span class="text-muted small me-1">${dt}:</span>` +
+    files.map((f, i) =>
+      `<span class="file-tab ${i===0?'active':''}" onclick="showFile(${i}, this)">${esc(f.relative_path.split('\\').pop())}</span>`
+    ).join('');
+  showFileByIdx(0);
+}
+
+function showFile(idx, el) {
+  document.querySelectorAll('.file-tab').forEach(t => t.classList.remove('active'));
+  if (el) el.classList.add('active');
+  showFileByIdx(idx);
+}
+
+function showFileByIdx(idx) {
+  const files = selectedSnap?.files || [];
+  const file  = files[idx];
+  const placeholder = document.getElementById('file-placeholder');
+  const pre = document.getElementById('file-content');
+  if (!file) { placeholder.classList.remove('d-none'); pre.classList.add('d-none'); return; }
+  placeholder.classList.add('d-none');
+  pre.classList.remove('d-none');
+  pre.textContent = file.content || '(пусто)';
+}
+
+// ── Snap Now ──────────────────────────────────────────────────────────────────
+async function snapNow() {
+  if (!selectedCfg) return;
+  if (!selectedCfg.config_dir) { showToast('Сначала задайте Config dir', 'warning'); return; }
+  const btn = document.getElementById('btn-snap-now');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Снимаю...';
+  const { ok, data } = await apiCall(`/api/service-configs/${selectedCfg.id}/snapshots`, 'POST');
+  btn.disabled = false; btn.innerHTML = '<i class="bi bi-camera me-1"></i>Снять снапшот';
+  if (ok) {
+    showToast(data.created ? 'Снапшот сохранён' : 'Конфиг не изменился — снапшот не создан', data.created ? 'success' : 'warning');
+    if (data.created) await loadSnapshots();
+  } else showToast(data.error || 'Ошибка', 'danger');
+}
+
+// ── Run scheduler now ─────────────────────────────────────────────────────────
+async function runNow() {
+  const btn = document.getElementById('btn-run-now');
+  btn.disabled = true;
+  const { ok } = await apiCall('/api/scheduler/run-now', 'POST');
+  showToast(ok ? 'Опрос запущен в фоне' : 'Ошибка', ok ? 'success' : 'danger');
+  setTimeout(async () => { btn.disabled = false; await loadSchedulerStatus(); }, 2000);
+}
+
+// ── Diff ──────────────────────────────────────────────────────────────────────
+async function openDiff(snapIdA, snapIdB) {
+  // Ensure both snapshots have files loaded
+  diffSnapA = await ensureFiles(snapIdA);
+  diffSnapB = await ensureFiles(snapIdB);
+  if (!diffSnapA || !diffSnapB) return;
+
+  const dtA = new Date(diffSnapA.created_at).toLocaleString('ru');
+  const dtB = new Date(diffSnapB.created_at).toLocaleString('ru');
+  document.getElementById('diff-title').textContent   = `Diff: ${dtA} vs ${dtB}`;
+  document.getElementById('diff-subtitle').textContent = `${commentBadge(diffSnapA.comment).replace(/<[^>]+>/g,'')} → ${commentBadge(diffSnapB.comment).replace(/<[^>]+>/g,'')}`;
+
+  // Build union file list
+  const filesA = new Map((diffSnapA.files||[]).map(f => [f.relative_path, f.content]));
+  const filesB = new Map((diffSnapB.files||[]).map(f => [f.relative_path, f.content]));
+  const allFiles = [...new Set([...filesA.keys(), ...filesB.keys()])].sort();
+
+  const sel = document.getElementById('diff-file-select');
+  sel.innerHTML = allFiles.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('');
+  renderDiff();
+  diffModal.show();
+}
+
+function renderDiff() {
+  const path = document.getElementById('diff-file-select').value;
+  if (!path || !diffSnapA || !diffSnapB) return;
+
+  const filesA = new Map((diffSnapA.files||[]).map(f => [f.relative_path, f.content||'']));
+  const filesB = new Map((diffSnapB.files||[]).map(f => [f.relative_path, f.content||'']));
+
+  const oldContent = filesB.get(path) || '';  // older = B (snapshots are newest-first)
+  const newContent = filesA.get(path) || '';
+
+  const unified = Diff.createTwoFilesPatch(path, path, oldContent, newContent,
+    new Date(diffSnapB.created_at).toLocaleString('ru'),
+    new Date(diffSnapA.created_at).toLocaleString('ru'));
+
+  document.getElementById('diff-output').innerHTML = Diff2Html.html(unified, {
+    inputFormat: 'diff',
+    showFiles: false,
+    matching: 'lines',
+    outputFormat: 'side-by-side',
+  });
+}
+
+async function ensureFiles(snapId) {
+  let snap = snapshots.find(s => s.id === snapId);
+  if (!snap) return null;
+  if (snap.files) return snap;
+  const { ok, data } = await apiCall(`/api/service-configs/${selectedCfg.id}/snapshots/${snapId}`);
+  if (!ok) { showToast(data.error || 'Ошибка загрузки снапшота', 'danger'); return null; }
+  snap.files = data.files;
+  return snap;
+}
+
+// ── Delete snapshot ───────────────────────────────────────────────────────────
+function confirmDelSnap(id, label) {
+  delSnapId = id;
+  document.getElementById('del-snap-label').textContent = label;
+  delSnapModal.show();
+}
+
+document.getElementById('btn-confirm-del-snap').addEventListener('click', async () => {
+  const { ok, data } = await apiCall(
+    `/api/service-configs/${selectedCfg.id}/snapshots/${delSnapId}`, 'DELETE'
+  );
+  delSnapModal.hide();
+  if (ok) { showToast('Снапшот удалён', 'success'); await loadSnapshots(); }
+  else showToast(data.error || 'Ошибка', 'danger');
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function esc(str) {
+  const d = document.createElement('div'); d.textContent = str || ''; return d.innerHTML;
+}
+
+init();
+</script>
+{% endblock %}

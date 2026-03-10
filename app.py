@@ -68,6 +68,11 @@ def logs_page():
     return render_template("logs.html")
 
 
+@app.route("/configs")
+def configs_page():
+    return render_template("configs.html")
+
+
 @app.route("/groups")
 def groups_page():
     return render_template("groups.html")

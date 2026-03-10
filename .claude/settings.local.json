@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(pip install APScheduler==3.10.4)",
-      "Bash(python -c \"import scheduler; import models; print\\(''OK''\\)\")"
+      "Bash(python -c \"import scheduler; import models; print\\(''OK''\\)\")",
+      "Bash(python -c \"from app import app; print\\(''Routes OK''\\)\")",
+      "Bash(python -m py_compile models.py scheduler.py config.py)",
+      "Bash(python -m py_compile app.py)"
     ]
   }
 }
