@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Service Portal{% endblock %}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet" />
+  <style>
+    body { background: #f0f2f5; }
+    .navbar-brand { font-weight: 700; letter-spacing: 0.5px; }
+    .sidebar { min-height: calc(100vh - 56px); background: #212529; }
+    .sidebar .nav-link { color: #adb5bd; border-radius: 6px; margin: 2px 8px; }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active { color: #fff; background: #0d6efd; }
+    .sidebar .nav-link i { width: 20px; }
+    .card { border: none; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+    .card-header { font-weight: 600; }
+    .status-badge { font-size: .75rem; padding: .3em .6em; }
+    .table th { font-size: .8rem; text-transform: uppercase; letter-spacing: .5px; color: #6c757d; }
+    .btn-action { padding: .2rem .5rem; font-size: .8rem; }
+    .spinner-overlay {
+      position: fixed; inset: 0; background: rgba(255,255,255,.6);
+      display: flex; align-items: center; justify-content: center; z-index: 9999;
+    }
+    #toast-container { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 10000; }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+
+<nav class="navbar navbar-dark bg-dark px-3">
+  <a class="navbar-brand" href="/"><i class="bi bi-server me-2"></i>Service Portal</a>
+  <span class="text-secondary small">Windows Service Manager via WinRM</span>
+</nav>
+
+<div class="container-fluid">
+  <div class="row">
+    <!-- Sidebar -->
+    <div class="col-auto col-md-2 sidebar py-3">
+      <ul class="nav flex-column">
+        <li class="nav-item">
+          <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">
+            <i class="bi bi-house-door"></i> Главная
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.path == '/servers' %}active{% endif %}" href="/servers">
+            <i class="bi bi-hdd-network"></i> Серверы
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.path == '/logs' %}active{% endif %}" href="/logs">
+            <i class="bi bi-journal-text"></i> Журнал
+          </a>
+        </li>
+      </ul>
+    </div>
+
+    <!-- Main content -->
+    <div class="col py-4 px-4">
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+</div>
+
+<!-- Toast notifications -->
+<div id="toast-container"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+function showToast(message, type = 'success') {
+  const id = 'toast-' + Date.now();
+  const color = type === 'success' ? 'bg-success' : (type === 'danger' ? 'bg-danger' : 'bg-warning');
+  const html = `
+    <div id="${id}" class="toast align-items-center text-white ${color} border-0 mb-2" role="alert">
+      <div class="d-flex">
+        <div class="toast-body">${message}</div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+      </div>
+    </div>`;
+  document.getElementById('toast-container').insertAdjacentHTML('beforeend', html);
+  const el = document.getElementById(id);
+  new bootstrap.Toast(el, { delay: 4000 }).show();
+  el.addEventListener('hidden.bs.toast', () => el.remove());
+}
+
+async function apiCall(url, method = 'GET', body = null) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(url, opts);
+  const data = await r.json();
+  return { ok: r.ok, status: r.status, data };
+}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

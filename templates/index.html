@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+{% block title %}Главная — Service Portal{% endblock %}
+
+{% block content %}
+<h4 class="mb-4"><i class="bi bi-house-door me-2"></i>Управление Windows-сервисами</h4>
+
+{% if not servers %}
+<div class="alert alert-info">
+  Серверы не добавлены. <a href="/servers">Добавьте сервер</a> для начала работы.
+</div>
+{% else %}
+
+<!-- Server tabs -->
+<ul class="nav nav-tabs mb-0" id="server-tabs">
+  {% for server in servers %}
+  <li class="nav-item">
+    <button class="nav-link {% if loop.first %}active{% endif %}"
+            data-server-id="{{ server.id }}"
+            data-server-name="{{ server.name }}"
+            onclick="selectServer({{ server.id }}, '{{ server.name }}')">
+      <i class="bi bi-hdd-network me-1"></i>{{ server.name }}
+    </button>
+  </li>
+  {% endfor %}
+</ul>
+
+<!-- Services panel -->
+<div class="card rounded-top-0">
+  <div class="card-header d-flex justify-content-between align-items-center py-2">
+    <span id="panel-title" class="fw-semibold"></span>
+    <div class="d-flex gap-2 align-items-center">
+      <input type="text" id="svc-search" class="form-control form-control-sm"
+             placeholder="Поиск..." style="width:200px">
+      <button class="btn btn-sm btn-outline-secondary" id="btn-refresh">
+        <i class="bi bi-arrow-clockwise"></i>
+      </button>
+      <a id="btn-configure" href="/servers" class="btn btn-sm btn-outline-primary" title="Настроить список сервисов">
+        <i class="bi bi-gear me-1"></i>Настроить
+      </a>
+    </div>
+  </div>
+
+  <div class="card-body p-0">
+    <!-- Loading -->
+    <div id="svc-loading" class="text-center py-5 d-none">
+      <div class="spinner-border text-primary"></div>
+      <p class="mt-2 text-muted small">Загрузка...</p>
+    </div>
+
+    <!-- No configs hint -->
+    <div id="svc-no-config" class="text-center py-5 text-muted d-none">
+      <i class="bi bi-gear fs-1 d-block mb-2"></i>
+      <p class="mb-2">Для этого сервера не настроены сервисы.</p>
+      <a href="/servers" class="btn btn-primary btn-sm">
+        <i class="bi bi-gear me-1"></i>Настроить сервисы
+      </a>
+    </div>
+
+    <!-- Error -->
+    <div id="svc-error" class="text-center py-5 text-danger d-none">
+      <i class="bi bi-exclamation-triangle fs-1 d-block mb-2"></i>
+      <p id="svc-error-msg"></p>
+    </div>
+
+    <!-- Services table -->
+    <div class="table-responsive">
+      <table class="table table-hover table-sm mb-0 d-none" id="svc-table">
+        <thead class="table-light">
+          <tr>
+            <th style="width:40px"></th>
+            <th>Сервис</th>
+            <th>Системное имя</th>
+            <th>Статус</th>
+            <th>Тип запуска</th>
+            <th class="text-end">Действия</th>
+          </tr>
+        </thead>
+        <tbody id="svc-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentServerId = null;
+let currentServices = [];
+
+function selectServer(id, name) {
+  currentServerId = id;
+  // Update tab active state
+  document.querySelectorAll('#server-tabs .nav-link').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.serverId) === id);
+  });
+  document.getElementById('panel-title').textContent = name;
+  history.replaceState(null, '', `/?server=${id}`);
+  loadServices(id);
+}
+
+document.getElementById('btn-refresh')?.addEventListener('click', () => {
+  if (currentServerId) loadServices(currentServerId);
+});
+
+document.getElementById('svc-search')?.addEventListener('input', function () {
+  filterTable(this.value.toLowerCase());
+});
+
+function filterTable(q) {
+  document.querySelectorAll('#svc-tbody tr').forEach(row => {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+function showPanel(which) {
+  ['svc-loading', 'svc-no-config', 'svc-error', 'svc-table'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('d-none', id !== which);
+  });
+}
+
+async function loadServices(serverId) {
+  document.getElementById('svc-search').value = '';
+  showPanel('svc-loading');
+
+  const { ok, data } = await apiCall(`/api/servers/${serverId}/services`);
+
+  if (!ok) {
+    document.getElementById('svc-error-msg').textContent = data.error || 'Ошибка подключения';
+    showPanel('svc-error');
+    return;
+  }
+
+  if (!data.length) {
+    showPanel('svc-no-config');
+    return;
+  }
+
+  currentServices = data;
+  renderServices(data);
+  showPanel('svc-table');
+}
+
+function renderServices(services) {
+  document.getElementById('svc-tbody').innerHTML = services.map(svc => {
+    const isRunning = svc.status === 'Running';
+    const isStopped = svc.status === 'Stopped';
+    const isUnknown = svc.status === 'Unknown';
+
+    let badgeClass = 'bg-secondary';
+    if (isRunning) badgeClass = 'bg-success';
+    else if (isUnknown) badgeClass = 'bg-warning text-dark';
+
+    const statusIcon = isRunning
+      ? '<i class="bi bi-circle-fill text-success small"></i>'
+      : isUnknown
+        ? '<i class="bi bi-question-circle text-warning small"></i>'
+        : '<i class="bi bi-circle text-secondary small"></i>';
+
+    const errorHint = svc.error
+      ? `<span class="text-danger small ms-1" title="${esc(svc.error)}"><i class="bi bi-exclamation-circle"></i></span>`
+      : '';
+
+    const label = svc.label || svc.display_name || svc.name;
+
+    return `
+      <tr id="svc-row-${CSS.escape(svc.name)}">
+        <td class="text-center align-middle">${statusIcon}</td>
+        <td class="align-middle">
+          <span class="fw-semibold">${esc(label)}</span>${errorHint}
+          ${svc.config_description ? `<br><span class="text-muted small">${esc(svc.config_description)}</span>` : ''}
+        </td>
+        <td class="font-monospace small align-middle text-muted">${esc(svc.name)}</td>
+        <td class="align-middle">
+          <span class="badge status-badge ${badgeClass}">${esc(svc.status)}</span>
+        </td>
+        <td class="small text-muted align-middle">${esc(svc.start_type)}</td>
+        <td class="text-end align-middle text-nowrap">
+          <button class="btn btn-outline-success btn-action me-1"
+                  onclick="doAction('${esc(svc.name)}', 'start')"
+                  ${isRunning || isUnknown ? 'disabled' : ''} title="Запустить">
+            <i class="bi bi-play-fill"></i>
+          </button>
+          <button class="btn btn-outline-danger btn-action me-1"
+                  onclick="doAction('${esc(svc.name)}', 'stop')"
+                  ${isStopped || isUnknown ? 'disabled' : ''} title="Остановить">
+            <i class="bi bi-stop-fill"></i>
+          </button>
+          <button class="btn btn-outline-warning btn-action"
+                  onclick="doAction('${esc(svc.name)}', 'restart')"
+                  ${isUnknown ? 'disabled' : ''} title="Перезапустить">
+            <i class="bi bi-arrow-clockwise"></i>
+          </button>
+        </td>
+      </tr>`;
+  }).join('');
+}
+
+async function doAction(serviceName, action) {
+  const labels = { start: 'Запуск', stop: 'Остановка', restart: 'Перезапуск' };
+  const btns = document.querySelectorAll(`#svc-row-${CSS.escape(serviceName)} button`);
+  btns.forEach(b => b.disabled = true);
+
+  const { ok, data } = await apiCall(
+    `/api/servers/${currentServerId}/services/${encodeURIComponent(serviceName)}/action`,
+    'POST', { action }
+  );
+
+  if (ok) {
+    showToast(`${labels[action]} "${serviceName}": успешно`, 'success');
+    // Refresh only this service
+    const { ok: ok2, data: svc } = await apiCall(
+      `/api/servers/${currentServerId}/services/${encodeURIComponent(serviceName)}`
+    );
+    if (ok2) {
+      const idx = currentServices.findIndex(s => s.name === serviceName);
+      if (idx !== -1) currentServices[idx] = { ...currentServices[idx], status: svc.status };
+      renderServices(currentServices);
+      const q = document.getElementById('svc-search').value.toLowerCase();
+      if (q) filterTable(q);
+    }
+  } else {
+    showToast(`Ошибка: ${data.message || data.error}`, 'danger');
+    btns.forEach(b => b.disabled = false);
+  }
+}
+
+function esc(str) {
+  const d = document.createElement('div');
+  d.textContent = str || '';
+  return d.innerHTML;
+}
+
+// ── Auto-select server from URL or first tab ─────────────────────────────────
+const urlServerId = parseInt(new URLSearchParams(window.location.search).get('server'));
+const firstTab = document.querySelector('#server-tabs .nav-link');
+if (firstTab) {
+  const initId = urlServerId || parseInt(firstTab.dataset.serverId);
+  const initName = document.querySelector(`#server-tabs .nav-link[data-server-id="${initId}"]`)?.dataset.serverName || '';
+  selectServer(initId, initName);
+}
+</script>
+{% endblock %}
