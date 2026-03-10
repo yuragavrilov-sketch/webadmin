@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
@@ -45,12 +46,25 @@ class ServiceConfig(db.Model):
     service_name = db.Column(db.String(255), nullable=False)   # actual Windows service name
     display_name = db.Column(db.String(255), nullable=True)    # optional label override
     description = db.Column(db.Text, nullable=True)
-    config_dir = db.Column(db.String(1000), nullable=True)     # remote path to Config/ folder
     sort_order = db.Column(db.Integer, nullable=False, default=0)
+    config_dir = db.Column(db.String(1000), nullable=True)
+    config_dir_detected_at = db.Column(db.DateTime, nullable=True)
+    config_dir_source = db.Column(db.String(20), nullable=True)  # auto/manual
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+    config_dirs = db.relationship(
+        "ServiceConfigDir", backref="service_config", lazy=True,
+        cascade="all, delete-orphan", order_by="ServiceConfigDir.sort_order",
+    )
     snapshots = db.relationship(
         "ConfigSnapshot", backref="service_config", lazy=True,
+        cascade="all, delete-orphan",
+    )
+    config_override = db.relationship(
+        "ServiceConfigOverride",
+        backref="service_config",
+        uselist=False,
+        lazy=True,
         cascade="all, delete-orphan",
     )
 
@@ -61,8 +75,10 @@ class ServiceConfig(db.Model):
             "service_name": self.service_name,
             "display_name": self.display_name or "",
             "description": self.description or "",
-            "config_dir": self.config_dir or "",
             "sort_order": self.sort_order,
+            "config_dir": self.config_dir,
+            "config_dir_detected_at": self.config_dir_detected_at.isoformat() if self.config_dir_detected_at else None,
+            "config_dir_source": self.config_dir_source,
         }
 
 
@@ -80,6 +96,13 @@ class ServiceGroup(db.Model):
     items = db.relationship(
         "ServiceGroupItem", backref="group", lazy=True,
         cascade="all, delete-orphan", order_by="ServiceGroupItem.sort_order"
+    )
+    group_config = db.relationship(
+        "GroupConfig",
+        backref="group",
+        uselist=False,
+        lazy=True,
+        cascade="all, delete-orphan",
     )
 
     def to_dict(self):
@@ -121,6 +144,101 @@ class ServiceGroupItem(db.Model):
             "display_name": cfg.display_name or "" if cfg else "",
             "description": cfg.description or "" if cfg else "",
             "sort_order": self.sort_order,
+        }
+
+
+class ServiceConfigDir(db.Model):
+    """One remote Config/ directory path associated with a ServiceConfig."""
+    __tablename__ = "service_config_dirs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    service_config_id = db.Column(
+        db.Integer, db.ForeignKey("service_configs.id", ondelete="CASCADE"), nullable=False
+    )
+    path = db.Column(db.String(1000), nullable=False)    # full remote directory path
+    label = db.Column(db.String(100), nullable=True)     # human-readable name, e.g. "Main", "Logging"
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "service_config_id": self.service_config_id,
+            "path": self.path,
+            "label": self.label or "",
+            "sort_order": self.sort_order,
+        }
+
+
+class GroupConfig(db.Model):
+    """Base JSON config for a service group (1:1 with ServiceGroup)."""
+    __tablename__ = "group_configs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(
+        db.Integer, db.ForeignKey("service_groups.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    base_config = db.Column(db.Text, nullable=False, default="{}")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "group_id": self.group_id,
+            "base_config": json.loads(self.base_config or "{}"),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class ServiceConfigOverride(db.Model):
+    """Instance-level JSON override for a configured service (1:1 with ServiceConfig)."""
+    __tablename__ = "service_config_overrides"
+
+    id = db.Column(db.Integer, primary_key=True)
+    service_config_id = db.Column(
+        db.Integer, db.ForeignKey("service_configs.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    override_config = db.Column(db.Text, nullable=False, default="{}")
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "service_config_id": self.service_config_id,
+            "override_config": json.loads(self.override_config or "{}"),
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class ConfigRevision(db.Model):
+    """Versioned config blob for group/instance/effective scopes."""
+    __tablename__ = "config_revisions"
+    __table_args__ = (
+        db.UniqueConstraint("scope_type", "scope_id", "version", name="uq_config_revision_scope_version"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    scope_type = db.Column(db.String(20), nullable=False)  # group/instance/effective
+    scope_id = db.Column(db.Integer, nullable=False)
+    version = db.Column(db.Integer, nullable=False)
+    content_hash = db.Column(db.String(64), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    comment = db.Column(db.String(500), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    source = db.Column(db.String(20), nullable=False, default="manual")  # manual/auto
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "scope_type": self.scope_type,
+            "scope_id": self.scope_id,
+            "version": self.version,
+            "content_hash": self.content_hash,
+            "content": json.loads(self.content or "{}"),
+            "comment": self.comment or "",
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "source": self.source,
         }
 
 

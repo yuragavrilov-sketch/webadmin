@@ -2,7 +2,22 @@ from flask import Flask, jsonify, request, render_template, abort
 from cryptography.fernet import Fernet, InvalidToken
 from config import Config
 from collections import defaultdict
-from models import db, Server, AuditLog, ServiceConfig, ServiceGroup, ServiceGroupItem, ConfigSnapshot, ConfigSnapshotFile
+import hashlib
+import json
+from models import (
+    db,
+    Server,
+    AuditLog,
+    ServiceConfig,
+    ServiceGroup,
+    ServiceGroupItem,
+    ConfigSnapshot,
+    ConfigSnapshotFile,
+    ServiceConfigDir,
+    GroupConfig,
+    ServiceConfigOverride,
+    ConfigRevision,
+)
 from winrm_manager import WinRMManager, WinRMError
 from datetime import datetime
 
@@ -47,6 +62,93 @@ def get_winrm(server: Server) -> WinRMManager:
         use_ssl=server.use_ssl,
         timeout=app.config["WINRM_TIMEOUT"],
     )
+
+
+def _json_required_object(data, field_name: str):
+    value = data.get(field_name)
+    if value is None:
+        return None, jsonify({"error": f"{field_name} is required"}), 400
+    if not isinstance(value, dict):
+        return None, jsonify({"error": f"{field_name} must be a JSON object"}), 400
+    return value, None, None
+
+
+def _json_to_text(obj: dict) -> str:
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True)
+
+
+def _content_hash(obj: dict) -> str:
+    payload = _json_to_text(obj)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _deep_merge(base, override):
+    """Deterministic deep-merge: override has priority over base."""
+    if not isinstance(base, dict):
+        base = {}
+    if not isinstance(override, dict):
+        return override
+
+    merged = {}
+    for key in sorted(set(base.keys()) | set(override.keys())):
+        if key in base and key in override:
+            if isinstance(base[key], dict) and isinstance(override[key], dict):
+                merged[key] = _deep_merge(base[key], override[key])
+            else:
+                merged[key] = override[key]
+        elif key in override:
+            merged[key] = override[key]
+        else:
+            merged[key] = base[key]
+    return merged
+
+
+def _next_revision_version(scope_type: str, scope_id: int) -> int:
+    current = (
+        db.session.query(db.func.max(ConfigRevision.version))
+        .filter_by(scope_type=scope_type, scope_id=scope_id)
+        .scalar()
+        or 0
+    )
+    return current + 1
+
+
+def _create_config_revision(scope_type: str, scope_id: int, content_obj: dict, comment: str | None, source: str):
+    if source not in ("manual", "auto", "ui"):
+        source = "manual"
+    rev = ConfigRevision(
+        scope_type=scope_type,
+        scope_id=scope_id,
+        version=_next_revision_version(scope_type, scope_id),
+        content_hash=_content_hash(content_obj),
+        content=_json_to_text(content_obj),
+        comment=(comment or "").strip() or None,
+        source=(source or "manual").strip() or "manual",
+    )
+    db.session.add(rev)
+    return rev
+
+
+def _detect_and_fill_config_dir(cfg: ServiceConfig):
+    """Best-effort auto-detection. Must not fail create endpoints."""
+    try:
+        detected = (get_winrm(cfg.server).get_service_config_dir(cfg.service_name) or "").strip()
+        if detected:
+            cfg.config_dir = detected
+            cfg.config_dir_detected_at = datetime.utcnow()
+            cfg.config_dir_source = "auto"
+    except Exception:
+        pass
+
+
+def _get_primary_group_for_config(cfg: ServiceConfig):
+    item = (
+        ServiceGroupItem.query
+        .filter_by(service_config_id=cfg.id)
+        .order_by(ServiceGroupItem.sort_order.asc(), ServiceGroupItem.id.asc())
+        .first()
+    )
+    return item.group if item else None
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +319,8 @@ def api_create_service_config(server_id):
         sort_order=max_order + 10,
     )
     db.session.add(cfg)
+    db.session.flush()
+    _detect_and_fill_config_dir(cfg)
     db.session.commit()
     return jsonify(cfg.to_dict()), 201
 
@@ -330,8 +434,8 @@ def api_service_action(server_id, service_name):
     try:
         mgr = get_winrm(server)
 
-        # Auto-snapshot before the action if a config_dir is configured
-        if cfg_record.config_dir:
+        # Auto-snapshot before the action if any config dirs are configured
+        if cfg_record.config_dirs:
             try:
                 from scheduler import take_snapshot
                 take_snapshot(db, mgr, cfg_record, comment=f"pre-action:{action}")
@@ -417,6 +521,7 @@ def api_create_service_config_global():
     )
     db.session.add(cfg)
     db.session.flush()  # get cfg.id without full commit
+    _detect_and_fill_config_dir(cfg)
 
     for gid in (data.get("group_ids") or []):
         grp = db.session.get(ServiceGroup, int(gid))
@@ -430,6 +535,243 @@ def api_create_service_config_global():
         for gi in cfg.group_items if gi.group
     ]
     return jsonify({**cfg.to_dict(), "server_name": server.name, "groups": groups}), 201
+
+
+@app.route("/api/groups/<int:group_id>/config", methods=["GET"])
+def api_get_group_config(group_id):
+    group = db.session.get(ServiceGroup, group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+    gc = GroupConfig.query.filter_by(group_id=group_id).first()
+    base = json.loads(gc.base_config) if gc and gc.base_config else {}
+    return jsonify({
+        "group_id": group_id,
+        "base_config": base,
+        "updated_at": gc.updated_at.isoformat() if gc and gc.updated_at else None,
+    })
+
+
+@app.route("/api/groups/<int:group_id>/config", methods=["PUT"])
+def api_put_group_config(group_id):
+    group = db.session.get(ServiceGroup, group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    data = request.get_json(force=True)
+    base_config, error_resp, error_code = _json_required_object(data, "base_config")
+    if error_resp:
+        return error_resp, error_code
+
+    gc = GroupConfig.query.filter_by(group_id=group_id).first()
+    if not gc:
+        gc = GroupConfig(group_id=group_id, base_config="{}")
+        db.session.add(gc)
+
+    gc.base_config = _json_to_text(base_config)
+    gc.updated_at = datetime.utcnow()
+
+    _create_config_revision(
+        scope_type="group",
+        scope_id=group_id,
+        content_obj=base_config,
+        comment=data.get("comment") or "group config updated",
+        source=(data.get("source") or "manual"),
+    )
+
+    affected_cfg_ids = [it.service_config_id for it in group.items if it.service_config_id]
+    for cfg_id in affected_cfg_ids:
+        ov = ServiceConfigOverride.query.filter_by(service_config_id=cfg_id).first()
+        ov_obj = json.loads(ov.override_config) if ov and ov.override_config else {}
+        eff_obj = _deep_merge(base_config, ov_obj)
+        _create_config_revision(
+            scope_type="effective",
+            scope_id=cfg_id,
+            content_obj=eff_obj,
+            comment=f"effective config updated by group:{group_id}",
+            source=(data.get("source") or "manual"),
+        )
+
+    db.session.commit()
+    return jsonify({
+        "group_id": group_id,
+        "base_config": base_config,
+        "updated_at": gc.updated_at.isoformat() if gc.updated_at else None,
+    })
+
+
+@app.route("/api/service-configs/<int:cfg_id>/config-override", methods=["GET"])
+def api_get_config_override(cfg_id):
+    cfg = db.session.get(ServiceConfig, cfg_id)
+    if not cfg:
+        return jsonify({"error": "Not found"}), 404
+    ov = ServiceConfigOverride.query.filter_by(service_config_id=cfg_id).first()
+    override_obj = json.loads(ov.override_config) if ov and ov.override_config else {}
+    return jsonify({
+        "service_config_id": cfg_id,
+        "override_config": override_obj,
+        "updated_at": ov.updated_at.isoformat() if ov and ov.updated_at else None,
+    })
+
+
+@app.route("/api/service-configs/<int:cfg_id>/config-override", methods=["PUT"])
+def api_put_config_override(cfg_id):
+    cfg = db.session.get(ServiceConfig, cfg_id)
+    if not cfg:
+        return jsonify({"error": "Not found"}), 404
+
+    data = request.get_json(force=True)
+    override_config, error_resp, error_code = _json_required_object(data, "override_config")
+    if error_resp:
+        return error_resp, error_code
+
+    ov = ServiceConfigOverride.query.filter_by(service_config_id=cfg_id).first()
+    if not ov:
+        ov = ServiceConfigOverride(service_config_id=cfg_id, override_config="{}")
+        db.session.add(ov)
+
+    ov.override_config = _json_to_text(override_config)
+    ov.updated_at = datetime.utcnow()
+
+    _create_config_revision(
+        scope_type="instance",
+        scope_id=cfg_id,
+        content_obj=override_config,
+        comment=data.get("comment") or "instance override updated",
+        source=(data.get("source") or "manual"),
+    )
+
+    group = _get_primary_group_for_config(cfg)
+    gc = GroupConfig.query.filter_by(group_id=group.id).first() if group else None
+    base_obj = json.loads(gc.base_config) if gc and gc.base_config else {}
+    eff_obj = _deep_merge(base_obj, override_config)
+    _create_config_revision(
+        scope_type="effective",
+        scope_id=cfg_id,
+        content_obj=eff_obj,
+        comment=data.get("comment") or "effective config recalculated",
+        source=(data.get("source") or "manual"),
+    )
+
+    db.session.commit()
+    return jsonify({
+        "service_config_id": cfg_id,
+        "override_config": override_config,
+        "updated_at": ov.updated_at.isoformat() if ov.updated_at else None,
+    })
+
+
+@app.route("/api/service-configs/<int:cfg_id>/config-override", methods=["DELETE"])
+def api_delete_config_override(cfg_id):
+    cfg = db.session.get(ServiceConfig, cfg_id)
+    if not cfg:
+        return jsonify({"error": "Not found"}), 404
+
+    ov = ServiceConfigOverride.query.filter_by(service_config_id=cfg_id).first()
+    if ov:
+        db.session.delete(ov)
+
+    _create_config_revision(
+        scope_type="instance",
+        scope_id=cfg_id,
+        content_obj={},
+        comment="instance override deleted",
+        source="manual",
+    )
+
+    group = _get_primary_group_for_config(cfg)
+    gc = GroupConfig.query.filter_by(group_id=group.id).first() if group else None
+    base_obj = json.loads(gc.base_config) if gc and gc.base_config else {}
+    _create_config_revision(
+        scope_type="effective",
+        scope_id=cfg_id,
+        content_obj=base_obj,
+        comment="effective config reset to base after override delete",
+        source="manual",
+    )
+    db.session.commit()
+    return jsonify({"message": "Deleted."})
+
+
+@app.route("/api/service-configs/<int:cfg_id>/effective-config", methods=["GET"])
+def api_get_effective_config(cfg_id):
+    cfg = db.session.get(ServiceConfig, cfg_id)
+    if not cfg:
+        return jsonify({"error": "Not found"}), 404
+
+    selected_group_id_raw = request.args.get("group_id")
+    if selected_group_id_raw is not None:
+        try:
+            selected_group_id = int(selected_group_id_raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "group_id must be an integer"}), 400
+
+        group = db.session.get(ServiceGroup, selected_group_id)
+        if not group:
+            return jsonify({"error": "Group not found"}), 404
+
+        membership = ServiceGroupItem.query.filter_by(
+            group_id=selected_group_id,
+            service_config_id=cfg_id,
+        ).first()
+        if not membership:
+            return jsonify({"error": "Service config is not a member of selected group"}), 400
+    else:
+        group = _get_primary_group_for_config(cfg)
+
+    gc = GroupConfig.query.filter_by(group_id=group.id).first() if group else None
+    ov = ServiceConfigOverride.query.filter_by(service_config_id=cfg_id).first()
+
+    base_obj = json.loads(gc.base_config) if gc and gc.base_config else {}
+    override_obj = json.loads(ov.override_config) if ov and ov.override_config else {}
+    effective_obj = _deep_merge(base_obj, override_obj)
+
+    return jsonify({
+        "service_config_id": cfg_id,
+        "group_id": group.id if group else None,
+        "base_config": base_obj,
+        "override_config": override_obj,
+        "effective_config": effective_obj,
+    })
+
+
+@app.route("/api/groups/<int:group_id>/config/revisions", methods=["GET"])
+def api_list_group_config_revisions(group_id):
+    group = db.session.get(ServiceGroup, group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    revisions = (
+        ConfigRevision.query
+        .filter_by(scope_type="group", scope_id=group_id)
+        .order_by(ConfigRevision.version.desc())
+        .all()
+    )
+    return jsonify([r.to_dict() for r in revisions])
+
+
+@app.route("/api/groups/<int:group_id>/config/revisions", methods=["POST"])
+def api_create_group_config_revision(group_id):
+    group = db.session.get(ServiceGroup, group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    content_obj = data.get("content")
+    if content_obj is None:
+        gc = GroupConfig.query.filter_by(group_id=group_id).first()
+        content_obj = json.loads(gc.base_config) if gc and gc.base_config else {}
+    if not isinstance(content_obj, dict):
+        return jsonify({"error": "content must be a JSON object"}), 400
+
+    rev = _create_config_revision(
+        scope_type="group",
+        scope_id=group_id,
+        content_obj=content_obj,
+        comment=data.get("comment") or "group revision created",
+        source=(data.get("source") or "manual"),
+    )
+    db.session.commit()
+    return jsonify(rev.to_dict()), 201
 
 
 @app.route("/api/service-configs/<int:cfg_id>", methods=["PUT"])
@@ -772,27 +1114,69 @@ def api_group_action(group_id):
 # API — Config snapshots
 # ---------------------------------------------------------------------------
 
-@app.route("/api/service-configs/<int:cfg_id>/config-dir", methods=["PUT"])
-def api_update_config_dir(cfg_id):
-    """Set (or clear) the config_dir path for a service config."""
+@app.route("/api/service-configs/<int:cfg_id>/config-dirs", methods=["GET"])
+def api_list_config_dirs(cfg_id):
+    cfg = db.session.get(ServiceConfig, cfg_id)
+    if not cfg:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify([d.to_dict() for d in cfg.config_dirs])
+
+
+@app.route("/api/service-configs/<int:cfg_id>/config-dirs", methods=["POST"])
+def api_add_config_dir(cfg_id):
     cfg = db.session.get(ServiceConfig, cfg_id)
     if not cfg:
         return jsonify({"error": "Not found"}), 404
     data = request.get_json(force=True)
-    cfg.config_dir = (data.get("config_dir") or "").strip() or None
+    path = (data.get("path") or "").strip()
+    if not path:
+        return jsonify({"error": "path is required"}), 400
+    max_order = db.session.query(db.func.max(ServiceConfigDir.sort_order))\
+        .filter_by(service_config_id=cfg_id).scalar() or 0
+    d = ServiceConfigDir(
+        service_config_id=cfg_id,
+        path=path,
+        label=(data.get("label") or "").strip() or None,
+        sort_order=max_order + 10,
+    )
+    db.session.add(d)
     db.session.commit()
-    return jsonify(cfg.to_dict())
+    return jsonify(d.to_dict()), 201
+
+
+@app.route("/api/service-configs/<int:cfg_id>/config-dirs/<int:dir_id>", methods=["PUT"])
+def api_update_config_dir(cfg_id, dir_id):
+    d = ServiceConfigDir.query.filter_by(id=dir_id, service_config_id=cfg_id).first()
+    if not d:
+        return jsonify({"error": "Not found"}), 404
+    data = request.get_json(force=True)
+    if "path" in data:
+        d.path = data["path"].strip()
+    if "label" in data:
+        d.label = (data["label"] or "").strip() or None
+    db.session.commit()
+    return jsonify(d.to_dict())
+
+
+@app.route("/api/service-configs/<int:cfg_id>/config-dirs/<int:dir_id>", methods=["DELETE"])
+def api_delete_config_dir(cfg_id, dir_id):
+    d = ServiceConfigDir.query.filter_by(id=dir_id, service_config_id=cfg_id).first()
+    if not d:
+        return jsonify({"error": "Not found"}), 404
+    db.session.delete(d)
+    db.session.commit()
+    return jsonify({"message": "Deleted."})
 
 
 @app.route("/api/service-configs/<int:cfg_id>/detect-config-dir", methods=["POST"])
 def api_detect_config_dir(cfg_id):
-    """Auto-detect Config/ directory from the service exe path via WinRM."""
+    """Auto-detect Config/ directory from service exe path via WinRM (returns path, does not save)."""
     cfg = db.session.get(ServiceConfig, cfg_id)
     if not cfg:
         return jsonify({"error": "Not found"}), 404
     try:
         detected = get_winrm(cfg.server).get_service_config_dir(cfg.service_name)
-        return jsonify({"config_dir": detected})
+        return jsonify({"path": detected})
     except (WinRMError, Exception) as e:
         return jsonify({"error": str(e)}), 502
 
@@ -823,7 +1207,16 @@ def api_create_snapshot_manual(cfg_id):
     cfg = db.session.get(ServiceConfig, cfg_id)
     if not cfg:
         return jsonify({"error": "Not found"}), 404
-    if not cfg.config_dir:
+
+    resolved_config_dir = (cfg.config_dir or "").strip()
+    if not resolved_config_dir and cfg.config_dirs:
+        resolved_config_dir = (cfg.config_dirs[0].path or "").strip()
+
+    if resolved_config_dir and not cfg.config_dirs:
+        db.session.add(ServiceConfigDir(service_config_id=cfg.id, path=resolved_config_dir, label="Primary", sort_order=10))
+        db.session.flush()
+
+    if not resolved_config_dir:
         return jsonify({"error": "config_dir not set for this service config"}), 400
     try:
         from scheduler import take_snapshot

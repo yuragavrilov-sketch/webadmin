@@ -100,6 +100,7 @@
             <button class="btn btn-primary w-100" id="btn-add-save">
               <i class="bi bi-floppy me-1"></i>Сохранить
             </button>
+            <div id="add-create-status" class="alert alert-info mt-2 py-2 px-2 d-none small mb-0"></div>
           </div>
           <!-- Right: browse list -->
           <div class="col-md-7">
@@ -302,8 +303,16 @@ function openAddModal() {
   document.getElementById('browse-table').classList.add('d-none');
   document.getElementById('browse-search').classList.add('d-none');
   document.getElementById('browse-hint').textContent = '(нажмите «Обзор» для загрузки)';
+  setAddStatus('', '', true);
   browsedSvcs = [];
   addModal.show();
+}
+
+function setAddStatus(type, message, hidden = false) {
+  const box = document.getElementById('add-create-status');
+  box.className = `alert alert-${type || 'info'} mt-2 py-2 px-2 small mb-0`;
+  box.textContent = message || '';
+  box.classList.toggle('d-none', hidden);
 }
 
 function renderAddGroups() {
@@ -344,11 +353,17 @@ document.getElementById('btn-add-save').addEventListener('click', async () => {
   });
   btn.disabled = false;
   if (ok) {
-    addModal.hide();
-    showToast('Сервис добавлен', 'success');
+    if (data.config_dir) {
+      setAddStatus('success', `Сервис добавлен. config_dir автоопределён: ${data.config_dir}`);
+      showToast(`Сервис добавлен. config_dir: ${data.config_dir}`, 'success');
+    } else {
+      setAddStatus('warning', 'Сервис добавлен, но config_dir автоопределить не удалось. Можно продолжить настройку позже в разделе конфигураций.');
+      showToast('Сервис добавлен, config_dir не автоопределён', 'warning');
+    }
     const r = await apiCall('/api/service-configs');
     if (r.ok) { allSvcs = r.data; render(allSvcs); }
   } else {
+    setAddStatus('danger', data.error || 'Ошибка создания сервиса');
     showToast(data.error || 'Ошибка', 'danger');
   }
 });

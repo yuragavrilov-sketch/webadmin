@@ -21,6 +21,7 @@
              background:#1e1e1e; color:#d4d4d4; border-radius:6px; padding:1rem;
              max-height:480px; overflow-y:auto; }
 .sched-badge { font-size:.75rem; }
+.json-editor { font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:.78rem; min-height:150px; }
 /* diff2html overrides */
 .d2h-wrapper { font-size:.8rem; }
 </style>
@@ -77,28 +78,99 @@
             </div>
           </div>
 
-          <!-- Config dir row -->
-          <div class="mt-2 d-flex gap-2 align-items-center">
-            <label class="small text-muted text-nowrap mb-0">Config dir:</label>
-            <input class="form-control form-control-sm font-monospace" id="rp-config-dir"
-                   placeholder="C:\App\MyService\Config" style="font-size:.78rem"/>
-            <button class="btn btn-sm btn-outline-secondary text-nowrap" onclick="detectConfigDir()" id="btn-detect" title="Авто-определить по пути exe">
-              <i class="bi bi-search"></i>
-            </button>
-            <button class="btn btn-sm btn-outline-primary text-nowrap" onclick="saveConfigDir()">
-              <i class="bi bi-floppy"></i>
-            </button>
+          <div class="mt-2 row g-2 align-items-center">
+            <div class="col-md-5">
+              <label class="small text-muted mb-1">Группа</label>
+              <select class="form-select form-select-sm" id="rp-group"></select>
+            </div>
+            <div class="col-md-7 small">
+              <div class="text-muted">Config dir (backend auto-detect):</div>
+              <div id="rp-config-dir-status" class="fw-semibold">—</div>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- Snapshot list + file viewer side-by-side -->
+      <!-- Hierarchical config editors -->
+      <div class="row g-3 mb-3">
+        <div class="col-md-6">
+          <div class="card h-100">
+            <div class="card-header py-2 d-flex justify-content-between align-items-center">
+              <span>Group Base Config</span>
+              <button class="btn btn-sm btn-outline-primary" id="btn-save-group-base">
+                <i class="bi bi-floppy"></i>
+              </button>
+            </div>
+            <div class="card-body">
+              <textarea class="form-control json-editor" id="group-base-json" spellcheck="false" placeholder="{}"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="card h-100">
+            <div class="card-header py-2 d-flex justify-content-between align-items-center">
+              <span>Instance Override Config</span>
+              <div class="d-flex gap-1">
+                <button class="btn btn-sm btn-outline-primary" id="btn-save-override">
+                  <i class="bi bi-floppy"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-danger" id="btn-del-override" title="Удалить override">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </div>
+            </div>
+            <div class="card-body">
+              <textarea class="form-control json-editor" id="instance-override-json" spellcheck="false" placeholder="{}"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-7">
+          <div class="card h-100">
+            <div class="card-header py-2 d-flex justify-content-between align-items-center">
+              <span>Effective Config</span>
+              <button class="btn btn-sm btn-outline-secondary" id="btn-refresh-effective">
+                <i class="bi bi-arrow-clockwise"></i>
+              </button>
+            </div>
+            <div class="card-body">
+              <textarea class="form-control json-editor" id="effective-json" spellcheck="false" readonly></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-5">
+          <div class="card h-100">
+            <div class="card-header py-2">Group Revisions</div>
+            <div class="card-body">
+              <div class="row g-2 mb-2">
+                <div class="col-7">
+                  <input type="text" class="form-control form-control-sm" id="rev-comment" placeholder="comment" />
+                </div>
+                <div class="col-5">
+                  <input type="text" class="form-control form-control-sm" id="rev-source" placeholder="source" value="ui" />
+                </div>
+              </div>
+              <button class="btn btn-sm btn-outline-primary mb-2" id="btn-create-rev">
+                <i class="bi bi-plus-circle me-1"></i>Создать ревизию
+              </button>
+              <div style="max-height:180px;overflow-y:auto">
+                <table class="table table-sm mb-0">
+                  <tbody id="rev-tbody">
+                    <tr><td class="text-muted small">Нет данных</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Snapshot list + file viewer side-by-side (legacy snapshot tools) -->
       <div class="row g-3">
         <!-- Snapshot timeline -->
         <div class="col-md-5">
           <div class="card">
             <div class="card-header py-2 d-flex justify-content-between align-items-center">
-              <span>История версий</span>
+              <span>История снапшотов</span>
               <span class="badge bg-secondary" id="snap-count">0</span>
             </div>
             <div class="card-body p-0" style="max-height:520px;overflow-y:auto">
@@ -189,6 +261,7 @@ const delSnapModal = new bootstrap.Modal(document.getElementById('delSnapModal')
 
 let allSvcs      = [];
 let selectedCfg  = null;   // {id, service_name, server_name, server_id, config_dir, ...}
+let selectedGroupId = null;
 let snapshots    = [];     // latest-first list
 let selectedSnap = null;   // {id, comment, created_at, files:[]}
 let diffSnapA    = null;   // snap object with .files
@@ -258,7 +331,8 @@ async function selectService(cfgId) {
 
   document.getElementById('rp-svcname').textContent = selectedCfg.service_name;
   document.getElementById('rp-server').textContent  = selectedCfg.server_name || '';
-  document.getElementById('rp-config-dir').value    = selectedCfg.config_dir || '';
+  document.getElementById('rp-config-dir-status').textContent = selectedCfg.config_dir || 'не определён';
+  populateGroupPicker();
 
   // Reset right side
   selectedSnap = null;
@@ -266,37 +340,190 @@ async function selectService(cfgId) {
   document.getElementById('file-placeholder').classList.remove('d-none');
   document.getElementById('file-content').classList.add('d-none');
 
-  await loadSnapshots();
+  await Promise.all([loadHierarchyEditors(), loadSnapshots()]);
 }
 
-// ── Config dir ────────────────────────────────────────────────────────────────
-async function detectConfigDir() {
-  if (!selectedCfg) return;
-  const btn = document.getElementById('btn-detect');
-  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-  const { ok, data } = await apiCall(`/api/service-configs/${selectedCfg.id}/detect-config-dir`, 'POST');
-  btn.disabled = false; btn.innerHTML = '<i class="bi bi-search"></i>';
-  if (ok && data.config_dir) {
-    document.getElementById('rp-config-dir').value = data.config_dir;
-    showToast('Определено: ' + data.config_dir, 'success');
-  } else {
-    showToast(data.error || 'Папка Config/ не найдена', 'warning');
+function populateGroupPicker() {
+  const sel = document.getElementById('rp-group');
+  const groups = selectedCfg?.groups || [];
+  sel.innerHTML = '';
+  if (!groups.length) {
+    selectedGroupId = null;
+    sel.innerHTML = '<option value="">Нет групп</option>';
+    return;
+  }
+
+  groups.forEach(g => {
+    const o = document.createElement('option');
+    o.value = g.group_id;
+    o.textContent = g.name;
+    sel.appendChild(o);
+  });
+  if (!selectedGroupId || !groups.find(g => g.group_id === selectedGroupId)) {
+    selectedGroupId = groups[0].group_id;
+  }
+  sel.value = String(selectedGroupId);
+}
+
+document.getElementById('rp-group').addEventListener('change', async function() {
+  selectedGroupId = parseInt(this.value) || null;
+  await loadHierarchyEditors();
+});
+
+function parseEditorJsonOrAlert(textareaId, title) {
+  const raw = document.getElementById(textareaId).value.trim();
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+      alert(`${title}: ожидается JSON-объект`);
+      return null;
+    }
+    return parsed;
+  } catch (e) {
+    alert(`${title}: невалидный JSON. ${e.message}`);
+    return null;
   }
 }
 
-async function saveConfigDir() {
-  if (!selectedCfg) return;
-  const dir = document.getElementById('rp-config-dir').value.trim();
-  const { ok, data } = await apiCall(`/api/service-configs/${selectedCfg.id}/config-dir`, 'PUT', { config_dir: dir });
-  if (ok) {
-    selectedCfg.config_dir = data.config_dir;
-    // update in allSvcs
-    const idx = allSvcs.findIndex(s => s.id === selectedCfg.id);
-    if (idx >= 0) allSvcs[idx].config_dir = data.config_dir;
-    renderSvcList(document.getElementById('svc-search').value.toLowerCase());
-    showToast('Config dir сохранён', 'success');
-  } else showToast(data.error || 'Ошибка', 'danger');
+function prettyJson(val) {
+  return JSON.stringify(val || {}, null, 2);
 }
+
+function resolveApiJson(data, keys = []) {
+  if (data == null) return {};
+  for (const k of keys) {
+    if (Object.prototype.hasOwnProperty.call(data, k)) {
+      const v = data[k];
+      if (typeof v === 'string') {
+        try { return JSON.parse(v); } catch { return {}; }
+      }
+      return v || {};
+    }
+  }
+  if (typeof data === 'string') {
+    try { return JSON.parse(data); } catch { return {}; }
+  }
+  return data;
+}
+
+async function loadHierarchyEditors() {
+  if (!selectedCfg) return;
+  await Promise.all([
+    loadGroupBaseConfig(),
+    loadInstanceOverrideConfig(),
+    loadEffectiveConfig(),
+    loadGroupRevisions(),
+  ]);
+}
+
+async function loadGroupBaseConfig() {
+  const editor = document.getElementById('group-base-json');
+  if (!selectedGroupId) {
+    editor.value = '{}';
+    return;
+  }
+  const { ok, data } = await apiCall(`/api/groups/${selectedGroupId}/config`);
+  if (!ok) { showToast(data.error || 'Ошибка загрузки Group Base', 'danger'); return; }
+  editor.value = prettyJson(resolveApiJson(data, ['base_config', 'config']));
+}
+
+async function loadInstanceOverrideConfig() {
+  const editor = document.getElementById('instance-override-json');
+  if (!selectedCfg) {
+    editor.value = '{}';
+    return;
+  }
+  const { ok, data } = await apiCall(`/api/service-configs/${selectedCfg.id}/config-override`);
+  if (!ok) { showToast(data.error || 'Ошибка загрузки Override', 'danger'); return; }
+  editor.value = prettyJson(resolveApiJson(data, ['override_config', 'config']));
+}
+
+async function loadEffectiveConfig() {
+  const editor = document.getElementById('effective-json');
+  if (!selectedCfg) {
+    editor.value = '{}';
+    return;
+  }
+  const groupQs = selectedGroupId ? `?group_id=${encodeURIComponent(selectedGroupId)}` : '';
+  const { ok, data } = await apiCall(`/api/service-configs/${selectedCfg.id}/effective-config${groupQs}`);
+  if (!ok) { showToast(data.error || 'Ошибка загрузки Effective', 'danger'); return; }
+  editor.value = prettyJson(resolveApiJson(data, ['effective_config', 'config']));
+}
+
+async function saveGroupBaseConfig() {
+  if (!selectedGroupId) { showToast('Выберите группу', 'warning'); return; }
+  const config = parseEditorJsonOrAlert('group-base-json', 'Group Base Config');
+  if (config === null) return;
+  const { ok, data } = await apiCall(`/api/groups/${selectedGroupId}/config`, 'PUT', {
+    base_config: config,
+    source: 'ui',
+    comment: 'updated from configs ui',
+  });
+  if (!ok) { showToast(data.error || 'Ошибка сохранения Group Base', 'danger'); return; }
+  showToast('Group Base Config сохранён', 'success');
+  await Promise.all([loadEffectiveConfig(), loadGroupRevisions()]);
+}
+
+async function saveInstanceOverrideConfig() {
+  if (!selectedCfg) return;
+  const config = parseEditorJsonOrAlert('instance-override-json', 'Instance Override Config');
+  if (config === null) return;
+  const { ok, data } = await apiCall(`/api/service-configs/${selectedCfg.id}/config-override`, 'PUT', {
+    override_config: config,
+    source: 'ui',
+    comment: 'updated from configs ui',
+  });
+  if (!ok) { showToast(data.error || 'Ошибка сохранения Override', 'danger'); return; }
+  showToast('Instance Override сохранён', 'success');
+  await Promise.all([loadEffectiveConfig(), loadGroupRevisions()]);
+}
+
+async function deleteInstanceOverrideConfig() {
+  if (!selectedCfg) return;
+  const { ok, data } = await apiCall(`/api/service-configs/${selectedCfg.id}/config-override`, 'DELETE');
+  if (!ok) { showToast(data.error || 'Ошибка удаления Override', 'danger'); return; }
+  showToast('Instance Override удалён', 'success');
+  await Promise.all([loadInstanceOverrideConfig(), loadEffectiveConfig(), loadGroupRevisions()]);
+}
+
+async function loadGroupRevisions() {
+  if (!selectedGroupId) {
+    document.getElementById('rev-tbody').innerHTML = '<tr><td class="text-muted small">Группа не выбрана</td></tr>';
+    return;
+  }
+  const { ok, data } = await apiCall(`/api/groups/${selectedGroupId}/config/revisions`);
+  if (!ok) { showToast(data.error || 'Ошибка загрузки ревизий', 'danger'); return; }
+  const list = Array.isArray(data) ? data : (data.items || []);
+  document.getElementById('rev-tbody').innerHTML = !list.length
+    ? '<tr><td class="text-muted small">Ревизий нет</td></tr>'
+    : list.map(r => `
+        <tr>
+          <td>
+            <div class="small fw-semibold">v${r.version ?? '—'} · ${esc(r.scope_type || 'group')}</div>
+            <div class="small text-muted">${esc(r.source || '—')} · ${esc(r.comment || '—')}</div>
+            <div class="small text-muted">${r.created_at ? new Date(r.created_at).toLocaleString('ru') : '—'}</div>
+          </td>
+        </tr>
+      `).join('');
+}
+
+async function createGroupRevision() {
+  if (!selectedGroupId) { showToast('Выберите группу', 'warning'); return; }
+  const comment = document.getElementById('rev-comment').value.trim();
+  const source = document.getElementById('rev-source').value.trim() || 'ui';
+  const { ok, data } = await apiCall(`/api/groups/${selectedGroupId}/config/revisions`, 'POST', { comment, source });
+  if (!ok) { showToast(data.error || 'Ошибка создания ревизии', 'danger'); return; }
+  showToast('Ревизия создана', 'success');
+  document.getElementById('rev-comment').value = '';
+  await loadGroupRevisions();
+}
+
+document.getElementById('btn-save-group-base').addEventListener('click', saveGroupBaseConfig);
+document.getElementById('btn-save-override').addEventListener('click', saveInstanceOverrideConfig);
+document.getElementById('btn-del-override').addEventListener('click', deleteInstanceOverrideConfig);
+document.getElementById('btn-refresh-effective').addEventListener('click', loadEffectiveConfig);
+document.getElementById('btn-create-rev').addEventListener('click', createGroupRevision);
 
 // ── Snapshots ─────────────────────────────────────────────────────────────────
 async function loadSnapshots() {
@@ -414,7 +641,6 @@ function showFileByIdx(idx) {
 // ── Snap Now ──────────────────────────────────────────────────────────────────
 async function snapNow() {
   if (!selectedCfg) return;
-  if (!selectedCfg.config_dir) { showToast('Сначала задайте Config dir', 'warning'); return; }
   const btn = document.getElementById('btn-snap-now');
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Снимаю...';
   const { ok, data } = await apiCall(`/api/service-configs/${selectedCfg.id}/snapshots`, 'POST');

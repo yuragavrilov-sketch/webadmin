@@ -44,6 +44,22 @@ def init_db():
                 conn.commit()
             print("[+] Migrated: added config_dir column to service_configs.")
 
+        if "config_dir_detected_at" not in existing_cols:
+            with db.engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE service_configs ADD COLUMN config_dir_detected_at TIMESTAMP"
+                ))
+                conn.commit()
+            print("[+] Migrated: added config_dir_detected_at column to service_configs.")
+
+        if "config_dir_source" not in existing_cols:
+            with db.engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE service_configs ADD COLUMN config_dir_source VARCHAR(20)"
+                ))
+                conn.commit()
+            print("[+] Migrated: added config_dir_source column to service_configs.")
+
         print("[+] Ready to start: python app.py")
 
 

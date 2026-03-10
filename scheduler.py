@@ -2,9 +2,10 @@
 Config-poll scheduler.
 
 Runs in a background thread (APScheduler BackgroundScheduler).
-Every CONFIG_POLL_INTERVAL_MINUTES minutes it reads Config/ directories
-for all ServiceConfigs that have config_dir set, computes a content hash,
-and writes a new ConfigSnapshot only when something changed.
+Every CONFIG_POLL_INTERVAL_MINUTES minutes it reads config directories
+for all ServiceConfigs that have either legacy ``config_dir`` or new
+``config_dirs``, computes a content hash, and writes a new ConfigSnapshot
+only when something changed.
 
 Public API used by app.py:
     start_scheduler(app)  -> BackgroundScheduler
@@ -43,27 +44,53 @@ def _compute_hash(files: dict[str, str]) -> str:
 
 def take_snapshot(db, mgr, cfg, comment: str = "auto") -> bool:
     """
-    Read all text files from *cfg.config_dir* via *mgr*, compare their
-    combined SHA-256 with the latest stored snapshot.  If anything changed
-    (or no snapshot exists yet) save a new ConfigSnapshot + ConfigSnapshotFile
-    rows and commit.
+    Read all text files from resolved config directories via *mgr*.
+    Resolution order: ``cfg.config_dir`` (legacy/single) first, then entries
+    from ``cfg.config_dirs``.
+    Relative paths are prefixed with the directory label (or last folder name)
+    so files from different dirs don't collide, e.g. ``Main\\app.json``.
 
-    Returns True when a new snapshot was written, False when content is
-    identical to the last snapshot.
+    Compares combined SHA-256 with the latest stored snapshot and writes a
+    new ConfigSnapshot + ConfigSnapshotFile rows only when content changed.
+
+    Returns True when a new snapshot was written.
     """
     from models import ConfigSnapshot, ConfigSnapshotFile
 
-    rel_paths = mgr.list_config_files(cfg.config_dir)
-    if not rel_paths:
+    resolved_dirs = []
+    legacy_path = (cfg.config_dir or "").strip()
+    if legacy_path:
+        resolved_dirs.append({"path": legacy_path, "label": "Primary"})
+
+    for cdir in (cfg.config_dirs or []):
+        cdir_path = (cdir.path or "").strip()
+        if not cdir_path:
+            continue
+        if legacy_path and cdir_path.lower() == legacy_path.lower():
+            continue
+        resolved_dirs.append({"path": cdir_path, "label": cdir.label})
+
+    if not resolved_dirs:
         return False
 
-    base = cfg.config_dir.rstrip("\\")
     files: dict[str, str] = {}
-    for rel in rel_paths:
+    for cdir in resolved_dirs:
+        cdir_path = cdir["path"]
+        dir_label = (cdir.get("label") or cdir_path.rstrip("\\").rsplit("\\", 1)[-1])
+        base = cdir_path.rstrip("\\")
         try:
-            files[rel] = mgr.read_config_file(f"{base}\\{rel}")
+            rel_paths = mgr.list_config_files(cdir_path)
         except Exception:
-            files[rel] = ""
+            continue
+        for rel in rel_paths:
+            prefixed = f"{dir_label}\\{rel}"
+            try:
+                files[prefixed] = mgr.read_config_file(f"{base}\\{rel}")
+            except Exception:
+                files[prefixed] = ""
+
+    if not files:
+        return False
 
     new_hash = _compute_hash(files)
 
@@ -102,7 +129,7 @@ def take_snapshot(db, mgr, cfg, comment: str = "auto") -> bool:
 def poll_configs(app) -> None:
     """
     APScheduler job entry-point.
-    Iterates over all ServiceConfigs with a config_dir set, groups them by
+    Iterates over all ServiceConfigs with config directories configured, groups them by
     server to reuse one WinRM connection per server, and calls take_snapshot
     for each service.
     """
@@ -121,8 +148,15 @@ def poll_configs(app) -> None:
 
         configs = (
             ServiceConfig.query
-            .filter(ServiceConfig.config_dir.isnot(None))
-            .filter(ServiceConfig.config_dir != "")
+            .filter(
+                db.or_(
+                    ServiceConfig.config_dirs.any(),
+                    db.and_(
+                        ServiceConfig.config_dir.isnot(None),
+                        ServiceConfig.config_dir != "",
+                    ),
+                )
+            )
             .all()
         )
 
