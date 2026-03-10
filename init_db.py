@@ -60,6 +60,40 @@ def init_db():
                 conn.commit()
             print("[+] Migrated: added config_dir_source column to service_configs.")
 
+        # Migrate existing servers table: add env/winrm operational fields
+        server_cols = {c["name"] for c in inspector.get_columns("servers")}
+        if "is_active" not in server_cols:
+            with db.engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE servers ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE"
+                ))
+                conn.commit()
+            print("[+] Migrated: added is_active column to servers.")
+
+        if "last_winrm_check_at" not in server_cols:
+            with db.engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE servers ADD COLUMN last_winrm_check_at TIMESTAMP"
+                ))
+                conn.commit()
+            print("[+] Migrated: added last_winrm_check_at column to servers.")
+
+        if "last_winrm_check_ok" not in server_cols:
+            with db.engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE servers ADD COLUMN last_winrm_check_ok BOOLEAN"
+                ))
+                conn.commit()
+            print("[+] Migrated: added last_winrm_check_ok column to servers.")
+
+        if "last_winrm_check_message" not in server_cols:
+            with db.engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE servers ADD COLUMN last_winrm_check_message TEXT"
+                ))
+                conn.commit()
+            print("[+] Migrated: added last_winrm_check_message column to servers.")
+
         print("[+] Ready to start: python app.py")
 
 

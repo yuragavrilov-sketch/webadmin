@@ -1,43 +1,72 @@
 {% extends "base.html" %}
-{% block title %}Серверы — Service Portal{% endblock %}
+{% block title %}Серверы и привязки ENV — Service Portal{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
-  <h4 class="mb-0"><i class="bi bi-hdd-network me-2"></i>Серверы</h4>
+  <h4 class="mb-0"><i class="bi bi-hdd-network me-2"></i>Серверы и привязки к ENV</h4>
   <button class="btn btn-primary" onclick="openAddModal()">
     <i class="bi bi-plus-lg me-1"></i>Добавить сервер
   </button>
 </div>
 
-<div class="card">
-  <div class="card-body p-0">
-    <div id="loading" class="text-center py-5">
-      <div class="spinner-border text-primary"></div>
+<div class="row g-3 mb-3">
+  <div class="col-lg-8">
+    <div class="card h-100">
+      <div class="card-header">Список серверов</div>
+      <div class="card-body p-0">
+        <div id="loading" class="text-center py-5">
+          <div class="spinner-border text-primary"></div>
+        </div>
+        <div class="table-responsive d-none" id="table-wrap">
+          <table class="table table-hover mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>Имя</th>
+                <th>Хост / IP</th>
+                <th>Порт</th>
+                <th>Пользователь</th>
+                <th>Протокол</th>
+                <th>Описание</th>
+                <th class="text-end">Действия</th>
+              </tr>
+            </thead>
+            <tbody id="servers-tbody"></tbody>
+          </table>
+        </div>
+        <div id="empty-msg" class="text-center py-5 text-muted d-none">
+          <i class="bi bi-hdd-network fs-1 d-block mb-2"></i>
+          Серверы не добавлены
+        </div>
+      </div>
     </div>
-    <div class="table-responsive d-none" id="table-wrap">
-      <table class="table table-hover mb-0">
-        <thead class="table-light">
-          <tr>
-            <th>Имя</th>
-            <th>Хост / IP</th>
-            <th>Порт</th>
-            <th>Пользователь</th>
-            <th>Протокол</th>
-            <th>Описание</th>
-            <th class="text-end">Действия</th>
-          </tr>
-        </thead>
-        <tbody id="servers-tbody"></tbody>
-      </table>
-    </div>
-    <div id="empty-msg" class="text-center py-5 text-muted d-none">
-      <i class="bi bi-hdd-network fs-1 d-block mb-2"></i>
-      Серверы не добавлены
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-header">Привязки ENV → Server</div>
+      <div class="card-body">
+        <div class="mb-2">
+          <label class="form-label">ENV</label>
+          <select class="form-select" id="link-env-select"></select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Сервер</label>
+          <select class="form-select" id="link-server-select"></select>
+        </div>
+        <button class="btn btn-sm btn-primary mb-3" id="btn-link-add">
+          <i class="bi bi-link-45deg me-1"></i>Привязать
+        </button>
+
+        <div class="border rounded p-2" style="max-height:420px;overflow-y:auto">
+          <div class="small text-muted mb-2">Текущие привязки выбранного ENV</div>
+          <div id="links-empty" class="text-muted small">Нет привязок</div>
+          <div id="links-list" class="d-flex flex-column gap-2"></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- ── Add / Edit Server Modal ── -->
 <div class="modal fade" id="serverModal" tabindex="-1">
   <div class="modal-dialog">
     <div class="modal-content">
@@ -96,7 +125,6 @@
   </div>
 </div>
 
-<!-- ── Delete confirm ── -->
 <div class="modal fade" id="deleteModal" tabindex="-1">
   <div class="modal-dialog modal-sm">
     <div class="modal-content">
@@ -106,7 +134,6 @@
       </div>
       <div class="modal-body">
         Удалить <strong id="del-name"></strong>?
-        Все настроенные сервисы и логи будут удалены.
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
@@ -120,20 +147,26 @@
 {% block scripts %}
 <script>
 let deleteId = null;
+let allServers = [];
+let allEnvs = [];
+let currentLinks = [];
+
 const serverModal = new bootstrap.Modal(document.getElementById('serverModal'));
 const deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
 
-// SSL auto-port
 document.getElementById('f-ssl').addEventListener('change', function () {
   document.getElementById('f-port').value = this.checked ? 5986 : 5985;
 });
 
-// Password visibility
 document.getElementById('toggle-pass').addEventListener('click', function () {
   const inp = document.getElementById('f-password');
   inp.type = inp.type === 'password' ? 'text' : 'password';
   this.querySelector('i').className = inp.type === 'text' ? 'bi bi-eye-slash' : 'bi bi-eye';
 });
+
+function esc(str) {
+  const d = document.createElement('div'); d.textContent = str || ''; return d.innerHTML;
+}
 
 function openAddModal() {
   document.getElementById('modal-title').textContent = 'Добавить сервер';
@@ -172,7 +205,7 @@ document.getElementById('btn-save').addEventListener('click', async () => {
   const body = {
     name: document.getElementById('f-name').value.trim(),
     hostname: document.getElementById('f-hostname').value.trim(),
-    port: parseInt(document.getElementById('f-port').value),
+    port: parseInt(document.getElementById('f-port').value, 10),
     username: document.getElementById('f-username').value.trim(),
     password: document.getElementById('f-password').value,
     use_ssl: document.getElementById('f-ssl').checked,
@@ -181,17 +214,33 @@ document.getElementById('btn-save').addEventListener('click', async () => {
   if (!body.name || !body.hostname || !body.username) {
     showToast('Заполните обязательные поля', 'warning'); return;
   }
-  if (!id && !body.password) { showToast('Введите пароль', 'warning'); return; }
+  if (!id && !body.password) {
+    showToast('Введите пароль', 'warning'); return;
+  }
+  const { ok, data } = await apiCall(id ? `/api/servers/${id}` : '/api/servers', id ? 'PUT' : 'POST', body);
+  if (!ok) {
+    showToast(data.error || 'Ошибка', 'danger'); return;
+  }
+  serverModal.hide();
+  showToast(id ? 'Сервер обновлён' : 'Сервер добавлен', 'success');
+  await initData();
+});
 
-  const btn = document.getElementById('btn-save');
-  btn.disabled = true;
-  const { ok, data } = await apiCall(
-    id ? `/api/servers/${id}` : '/api/servers',
-    id ? 'PUT' : 'POST', body
-  );
-  btn.disabled = false;
-  if (ok) { serverModal.hide(); showToast(id ? 'Обновлено' : 'Сервер добавлен', 'success'); await loadServers(); }
-  else showToast(data.error || 'Ошибка', 'danger');
+function confirmDelete(id, name) {
+  deleteId = id;
+  document.getElementById('del-name').textContent = name;
+  deleteModal.show();
+}
+
+document.getElementById('btn-confirm-delete').addEventListener('click', async () => {
+  const { ok, data } = await apiCall(`/api/servers/${deleteId}`, 'DELETE');
+  deleteModal.hide();
+  if (!ok) {
+    showToast(data.error || 'Ошибка удаления', 'danger');
+    return;
+  }
+  showToast('Сервер удалён', 'success');
+  await initData();
 });
 
 async function testConn(id, btn) {
@@ -203,65 +252,159 @@ async function testConn(id, btn) {
   showToast(data.message, data.success ? 'success' : 'danger');
 }
 
-function confirmDelete(id, name) {
-  deleteId = id;
-  document.getElementById('del-name').textContent = name;
-  deleteModal.show();
-}
-
-document.getElementById('btn-confirm-delete').addEventListener('click', async () => {
-  const { ok, data } = await apiCall(`/api/servers/${deleteId}`, 'DELETE');
-  deleteModal.hide();
-  if (ok) { showToast('Сервер удалён', 'success'); await loadServers(); }
-  else showToast(data.error || 'Ошибка', 'danger');
-});
-
 function renderServers(list) {
   document.getElementById('loading').classList.add('d-none');
+  const wrap = document.getElementById('table-wrap');
+  const empty = document.getElementById('empty-msg');
   if (!list.length) {
-    document.getElementById('empty-msg').classList.remove('d-none');
+    wrap.classList.add('d-none');
+    empty.classList.remove('d-none');
     return;
   }
-  document.getElementById('table-wrap').classList.remove('d-none');
+  empty.classList.add('d-none');
+  wrap.classList.remove('d-none');
   document.getElementById('servers-tbody').innerHTML = list.map(s => `
     <tr>
       <td><strong>${esc(s.name)}</strong></td>
       <td class="font-monospace small">${esc(s.hostname)}</td>
       <td>${s.port}</td>
       <td class="small">${esc(s.username)}</td>
-      <td>
-        ${s.use_ssl
-          ? '<span class="badge bg-success">HTTPS</span>'
-          : '<span class="badge bg-secondary">HTTP</span>'}
-      </td>
+      <td>${s.use_ssl ? '<span class="badge bg-success">HTTPS</span>' : '<span class="badge bg-secondary">HTTP</span>'}</td>
       <td class="text-muted small">${esc(s.description || '')}</td>
       <td class="text-end text-nowrap">
-        <button class="btn btn-sm btn-outline-secondary me-1"
-                onclick="testConn(${s.id}, this)" title="Тест соединения">
+        <button class="btn btn-sm btn-outline-secondary me-1" onclick="testConn(${s.id}, this)" title="Тест соединения">
           <i class="bi bi-plug"></i>
         </button>
-        <button class="btn btn-sm btn-outline-dark me-1"
-                onclick='openEditModal(${JSON.stringify(s)})'>
+        <button class="btn btn-sm btn-outline-dark me-1" onclick='openEditModal(${JSON.stringify(s)})'>
           <i class="bi bi-pencil"></i>
         </button>
-        <button class="btn btn-sm btn-outline-danger"
-                onclick="confirmDelete(${s.id}, '${esc(s.name)}')">
+        <button class="btn btn-sm btn-outline-danger" onclick="confirmDelete(${s.id}, '${esc(s.name)}')">
           <i class="bi bi-trash"></i>
         </button>
       </td>
     </tr>`).join('');
 }
 
-async function loadServers() {
-  const { ok, data } = await apiCall('/api/servers');
-  if (ok) renderServers(data);
-  else showToast('Не удалось загрузить серверы', 'danger');
+function renderLinkSelectors() {
+  const envSel = document.getElementById('link-env-select');
+  envSel.innerHTML = allEnvs.map(e => `<option value="${e.id}">${esc(e.code)} · ${esc(e.name)}</option>`).join('');
+  if (!allEnvs.length) {
+    envSel.innerHTML = '<option value="">ENV не найдены</option>';
+  }
+
+  const srvSel = document.getElementById('link-server-select');
+  srvSel.innerHTML = allServers.map(s => `<option value="${s.id}">${esc(s.name)} (${esc(s.hostname)})</option>`).join('');
+  if (!allServers.length) {
+    srvSel.innerHTML = '<option value="">Серверы не найдены</option>';
+  }
 }
 
-function esc(str) {
-  const d = document.createElement('div'); d.textContent = str || ''; return d.innerHTML;
+function winrmBadge(link) {
+  const msg = link.server?.last_winrm_check_message || 'нет данных';
+  const ok = link.server?.last_winrm_check_ok;
+  if (ok === true) return `<span class="badge bg-success" title="${esc(msg)}">ok</span>`;
+  if (ok === false) return `<span class="badge bg-danger" title="${esc(msg)}">fail</span>`;
+  return `<span class="badge bg-secondary" title="${esc(msg)}">unknown</span>`;
 }
 
-loadServers();
+function renderLinks() {
+  const empty = document.getElementById('links-empty');
+  const list = document.getElementById('links-list');
+  if (!currentLinks.length) {
+    empty.classList.remove('d-none');
+    list.innerHTML = '';
+    return;
+  }
+  empty.classList.add('d-none');
+  list.innerHTML = currentLinks.map(l => `
+    <div class="border rounded p-2">
+      <div class="d-flex justify-content-between align-items-start gap-2">
+        <div>
+          <div class="fw-semibold">${esc(l.server?.name || `server#${l.server_id}`)}</div>
+          <div class="small text-muted font-monospace">${esc(l.server?.hostname || '')}</div>
+          <div class="small mt-1">WinRM: ${winrmBadge(l)}</div>
+        </div>
+        <div class="d-flex gap-1">
+          <button class="btn btn-sm btn-outline-secondary" onclick="testLinkWinrm(${l.env_id}, ${l.server_id}, this)">
+            <i class="bi bi-plug"></i> test winrm
+          </button>
+          <button class="btn btn-sm btn-outline-danger" onclick="unlinkServer(${l.env_id}, ${l.server_id})">
+            <i class="bi bi-unlink"></i>
+          </button>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+async function loadEnvLinks() {
+  const envId = parseInt(document.getElementById('link-env-select').value, 10);
+  if (!envId) {
+    currentLinks = [];
+    renderLinks();
+    return;
+  }
+  const { ok, data } = await apiCall(`/api/envs/${envId}/servers`);
+  if (!ok) {
+    showToast(data.error || 'Ошибка загрузки привязок', 'danger');
+    return;
+  }
+  currentLinks = data;
+  renderLinks();
+}
+
+document.getElementById('link-env-select').addEventListener('change', loadEnvLinks);
+
+document.getElementById('btn-link-add').addEventListener('click', async () => {
+  const envId = parseInt(document.getElementById('link-env-select').value, 10);
+  const serverId = parseInt(document.getElementById('link-server-select').value, 10);
+  if (!envId || !serverId) {
+    showToast('Выберите ENV и сервер', 'warning');
+    return;
+  }
+  const { ok, data } = await apiCall(`/api/envs/${envId}/servers`, 'POST', { server_id: serverId, winrm_enabled: true });
+  if (!ok) {
+    showToast(data.error || 'Ошибка привязки', 'danger');
+    return;
+  }
+  const msg = data.winrm?.message || 'Готово';
+  showToast(`Сервер привязан. WinRM: ${msg}`, data.winrm?.success ? 'success' : 'warning');
+  await initData();
+});
+
+async function unlinkServer(envId, serverId) {
+  const { ok, data } = await apiCall(`/api/envs/${envId}/servers/${serverId}`, 'DELETE');
+  if (!ok) {
+    showToast(data.error || 'Ошибка отвязки', 'danger');
+    return;
+  }
+  showToast('Привязка удалена', 'success');
+  await loadEnvLinks();
+}
+
+async function testLinkWinrm(envId, serverId, btn) {
+  btn.disabled = true;
+  const prev = btn.innerHTML;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  const { ok, data } = await apiCall(`/api/envs/${envId}/servers/${serverId}/test-winrm`, 'POST');
+  btn.disabled = false;
+  btn.innerHTML = prev;
+  if (!ok) {
+    showToast(data.error || 'Ошибка test winrm', 'danger');
+    return;
+  }
+  showToast(data.message || 'Проверка выполнена', data.success ? 'success' : 'danger');
+  await initData();
+}
+
+async function initData() {
+  const [srvRes, envRes] = await Promise.all([apiCall('/api/servers'), apiCall('/api/envs')]);
+  if (srvRes.ok) allServers = srvRes.data;
+  if (envRes.ok) allEnvs = envRes.data;
+  renderServers(allServers);
+  renderLinkSelectors();
+  await loadEnvLinks();
+}
+
+initData();
 </script>
 {% endblock %}

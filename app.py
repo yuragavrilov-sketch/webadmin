@@ -8,6 +8,11 @@ from models import (
     db,
     Server,
     AuditLog,
+    Environment,
+    EnvServer,
+    ManagedService,
+    ServiceInstance,
+    ConfigSyncJob,
     ServiceConfig,
     ServiceGroup,
     ServiceGroupItem,
@@ -62,6 +67,16 @@ def get_winrm(server: Server) -> WinRMManager:
         use_ssl=server.use_ssl,
         timeout=app.config["WINRM_TIMEOUT"],
     )
+
+
+def _normalize_env_code(code: str) -> str:
+    return (code or "").strip().upper()
+
+
+def _update_server_winrm_check(server: Server, success: bool, message: str):
+    server.last_winrm_check_at = datetime.utcnow()
+    server.last_winrm_check_ok = bool(success)
+    server.last_winrm_check_message = (message or "").strip() or None
 
 
 def _json_required_object(data, field_name: str):
@@ -151,6 +166,18 @@ def _get_primary_group_for_config(cfg: ServiceConfig):
     return item.group if item else None
 
 
+def _queue_config_sync(instance_id: int, *, priority: int = 100) -> ConfigSyncJob:
+    job = ConfigSyncJob(
+        service_instance_id=instance_id,
+        job_type="sync_config",
+        status="queued",
+        priority=priority,
+        scheduled_at=datetime.utcnow(),
+    )
+    db.session.add(job)
+    return job
+
+
 # ---------------------------------------------------------------------------
 # Page routes
 # ---------------------------------------------------------------------------
@@ -163,6 +190,11 @@ def index():
 @app.route("/servers")
 def servers_page():
     return render_template("servers.html")
+
+
+@app.route("/envs")
+def envs_page():
+    return render_template("envs.html")
 
 
 @app.route("/logs")
@@ -281,6 +313,369 @@ def api_test_connection(server_id):
         return jsonify({"success": ok, "message": msg})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
+
+
+# ---------------------------------------------------------------------------
+# API — Environments (ENV directory)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/envs", methods=["GET"])
+def api_list_envs():
+    envs = Environment.query.order_by(Environment.sort_order.asc(), Environment.name.asc()).all()
+    return jsonify([e.to_dict() for e in envs])
+
+
+@app.route("/api/envs", methods=["POST"])
+def api_create_env():
+    data = request.get_json(force=True)
+    code = _normalize_env_code(data.get("code"))
+    name = (data.get("name") or "").strip()
+
+    if not code or not name:
+        return jsonify({"error": "code and name are required"}), 400
+    if Environment.query.filter_by(code=code).first():
+        return jsonify({"error": "Environment with this code already exists."}), 409
+    if Environment.query.filter_by(name=name).first():
+        return jsonify({"error": "Environment with this name already exists."}), 409
+
+    max_order = db.session.query(db.func.max(Environment.sort_order)).scalar() or 0
+    env = Environment(
+        code=code,
+        name=name,
+        description=(data.get("description") or "").strip() or None,
+        is_active=bool(data.get("is_active", True)),
+        sort_order=int(data.get("sort_order", max_order + 10)),
+    )
+    db.session.add(env)
+    db.session.commit()
+    return jsonify(env.to_dict()), 201
+
+
+@app.route("/api/envs/<int:env_id>", methods=["PUT"])
+def api_update_env(env_id):
+    env = db.session.get(Environment, env_id)
+    if not env:
+        return jsonify({"error": "Environment not found"}), 404
+
+    data = request.get_json(force=True)
+    if "code" in data:
+        code = _normalize_env_code(data.get("code"))
+        if not code:
+            return jsonify({"error": "code cannot be empty"}), 400
+        existing = Environment.query.filter_by(code=code).first()
+        if existing and existing.id != env_id:
+            return jsonify({"error": "Environment with this code already exists."}), 409
+        env.code = code
+
+    if "name" in data:
+        name = (data.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "name cannot be empty"}), 400
+        existing = Environment.query.filter_by(name=name).first()
+        if existing and existing.id != env_id:
+            return jsonify({"error": "Environment with this name already exists."}), 409
+        env.name = name
+
+    if "description" in data:
+        env.description = (data.get("description") or "").strip() or None
+    if "is_active" in data:
+        env.is_active = bool(data.get("is_active"))
+    if "sort_order" in data:
+        env.sort_order = int(data.get("sort_order"))
+
+    env.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(env.to_dict())
+
+
+@app.route("/api/envs/<int:env_id>", methods=["DELETE"])
+def api_delete_env(env_id):
+    env = db.session.get(Environment, env_id)
+    if not env:
+        return jsonify({"error": "Environment not found"}), 404
+    db.session.delete(env)
+    db.session.commit()
+    return jsonify({"message": "Environment deleted."})
+
+
+# ---------------------------------------------------------------------------
+# API — Environment servers (link + WinRM validation)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/envs/<int:env_id>/servers", methods=["GET"])
+def api_list_env_servers(env_id):
+    env = db.session.get(Environment, env_id)
+    if not env:
+        return jsonify({"error": "Environment not found"}), 404
+
+    links = EnvServer.query.filter_by(env_id=env_id).order_by(EnvServer.id.asc()).all()
+    return jsonify([l.to_dict() for l in links])
+
+
+@app.route("/api/envs/<int:env_id>/servers", methods=["POST"])
+def api_add_env_server(env_id):
+    env = db.session.get(Environment, env_id)
+    if not env:
+        return jsonify({"error": "Environment not found"}), 404
+
+    data = request.get_json(force=True)
+    server = None
+
+    server_id = data.get("server_id")
+    if server_id:
+        server = db.session.get(Server, int(server_id))
+        if not server:
+            return jsonify({"error": "Server not found"}), 404
+    else:
+        required = ("name", "hostname", "username", "password")
+        missing = [f for f in required if not data.get(f)]
+        if missing:
+            return jsonify({"error": f"Missing fields for server create: {', '.join(missing)}"}), 400
+        if Server.query.filter_by(name=(data.get("name") or "").strip()).first():
+            return jsonify({"error": "Server with this name already exists."}), 409
+
+        server = Server(
+            name=(data.get("name") or "").strip(),
+            hostname=(data.get("hostname") or "").strip(),
+            port=int(data.get("port", 5985)),
+            username=(data.get("username") or "").strip(),
+            password_enc=encrypt_password(data.get("password")),
+            use_ssl=bool(data.get("use_ssl", False)),
+            description=(data.get("description") or "").strip() or None,
+            is_active=bool(data.get("is_active", True)),
+        )
+        db.session.add(server)
+        db.session.flush()
+
+    existing_link = EnvServer.query.filter_by(env_id=env_id, server_id=server.id).first()
+    if existing_link:
+        return jsonify({"error": "Server already linked to this environment."}), 409
+
+    link = EnvServer(
+        env_id=env_id,
+        server_id=server.id,
+        winrm_enabled=bool(data.get("winrm_enabled", True)),
+    )
+    db.session.add(link)
+
+    winrm_ok = False
+    winrm_message = "Not tested"
+    try:
+        winrm_ok, winrm_message = get_winrm(server).test_connection()
+    except Exception as exc:
+        winrm_ok = False
+        winrm_message = str(exc)
+
+    _update_server_winrm_check(server, winrm_ok, winrm_message)
+    link.winrm_enabled = bool(link.winrm_enabled and winrm_ok)
+    db.session.commit()
+
+    return jsonify({
+        "link": link.to_dict(),
+        "winrm": {"success": winrm_ok, "message": winrm_message},
+    }), 201
+
+
+@app.route("/api/envs/<int:env_id>/servers/<int:server_id>", methods=["DELETE"])
+def api_remove_env_server(env_id, server_id):
+    link = EnvServer.query.filter_by(env_id=env_id, server_id=server_id).first()
+    if not link:
+        return jsonify({"error": "Link not found"}), 404
+    db.session.delete(link)
+    db.session.commit()
+    return jsonify({"message": "Server unlinked from environment."})
+
+
+@app.route("/api/envs/<int:env_id>/servers/<int:server_id>/test-winrm", methods=["POST"])
+def api_test_env_server_winrm(env_id, server_id):
+    link = EnvServer.query.filter_by(env_id=env_id, server_id=server_id).first()
+    if not link:
+        return jsonify({"error": "Link not found"}), 404
+
+    server = link.server
+    try:
+        ok, message = get_winrm(server).test_connection()
+    except Exception as exc:
+        ok, message = False, str(exc)
+
+    _update_server_winrm_check(server, ok, message)
+    link.winrm_enabled = bool(ok)
+    db.session.commit()
+    return jsonify({"success": ok, "message": message, "link": link.to_dict()})
+
+
+# ---------------------------------------------------------------------------
+# API — Services catalog (global)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/services/catalog", methods=["GET"])
+def api_list_services_catalog():
+    rows = ManagedService.query.order_by(ManagedService.service_name.asc()).all()
+    return jsonify([r.to_dict() for r in rows])
+
+
+@app.route("/api/services/catalog", methods=["POST"])
+def api_create_services_catalog_item():
+    data = request.get_json(force=True)
+    service_name = (data.get("service_name") or "").strip()
+    if not service_name:
+        return jsonify({"error": "service_name is required"}), 400
+    if ManagedService.query.filter_by(service_name=service_name).first():
+        return jsonify({"error": "Service with this name already exists."}), 409
+
+    row = ManagedService(
+        service_name=service_name,
+        display_name_default=(data.get("display_name_default") or "").strip() or None,
+        description=(data.get("description") or "").strip() or None,
+        owner_team=(data.get("owner_team") or "").strip() or None,
+        is_active=bool(data.get("is_active", True)),
+    )
+    db.session.add(row)
+    db.session.commit()
+    return jsonify(row.to_dict()), 201
+
+
+@app.route("/api/services/catalog/<int:service_id>", methods=["PUT"])
+def api_update_services_catalog_item(service_id):
+    row = db.session.get(ManagedService, service_id)
+    if not row:
+        return jsonify({"error": "Service not found"}), 404
+
+    data = request.get_json(force=True)
+    if "service_name" in data:
+        service_name = (data.get("service_name") or "").strip()
+        if not service_name:
+            return jsonify({"error": "service_name cannot be empty"}), 400
+        existing = ManagedService.query.filter_by(service_name=service_name).first()
+        if existing and existing.id != service_id:
+            return jsonify({"error": "Service with this name already exists."}), 409
+        row.service_name = service_name
+
+    if "display_name_default" in data:
+        row.display_name_default = (data.get("display_name_default") or "").strip() or None
+    if "description" in data:
+        row.description = (data.get("description") or "").strip() or None
+    if "owner_team" in data:
+        row.owner_team = (data.get("owner_team") or "").strip() or None
+    if "is_active" in data:
+        row.is_active = bool(data.get("is_active"))
+
+    row.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(row.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# API — Service instances (env + server + service)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/service-instances", methods=["GET"])
+def api_list_service_instances():
+    env_id = request.args.get("env_id", type=int)
+    server_id = request.args.get("server_id", type=int)
+    service_id = request.args.get("service_id", type=int)
+
+    q = ServiceInstance.query
+    if env_id:
+        q = q.filter_by(env_id=env_id)
+    if server_id:
+        q = q.filter_by(server_id=server_id)
+    if service_id:
+        q = q.filter_by(service_id=service_id)
+
+    rows = q.order_by(ServiceInstance.sort_order.asc(), ServiceInstance.id.asc()).all()
+    return jsonify([r.to_dict() for r in rows])
+
+
+@app.route("/api/service-instances", methods=["POST"])
+def api_create_service_instance():
+    data = request.get_json(force=True)
+    env_id = data.get("env_id")
+    server_id = data.get("server_id")
+    service_id = data.get("service_id")
+    if not env_id or not server_id or not service_id:
+        return jsonify({"error": "env_id, server_id and service_id are required"}), 400
+
+    env = db.session.get(Environment, int(env_id))
+    server = db.session.get(Server, int(server_id))
+    service = db.session.get(ManagedService, int(service_id))
+    if not env or not server or not service:
+        return jsonify({"error": "Environment, Server or Service not found"}), 404
+
+    if not EnvServer.query.filter_by(env_id=env.id, server_id=server.id).first():
+        return jsonify({"error": "Server is not linked to this environment"}), 400
+
+    existing = ServiceInstance.query.filter_by(env_id=env.id, server_id=server.id, service_id=service.id).first()
+    if existing:
+        return jsonify({"error": "Service instance already exists"}), 409
+
+    max_order = (
+        db.session.query(db.func.max(ServiceInstance.sort_order))
+        .filter_by(env_id=env.id, server_id=server.id)
+        .scalar()
+        or 0
+    )
+    inst = ServiceInstance(
+        env_id=env.id,
+        server_id=server.id,
+        service_id=service.id,
+        display_name_override=(data.get("display_name_override") or "").strip() or None,
+        description_override=(data.get("description_override") or "").strip() or None,
+        sort_order=int(data.get("sort_order", max_order + 10)),
+        config_sync_state="pending",
+    )
+    db.session.add(inst)
+    db.session.flush()
+    _queue_config_sync(inst.id)
+    db.session.commit()
+    return jsonify(inst.to_dict()), 201
+
+
+@app.route("/api/service-instances/<int:instance_id>", methods=["PUT"])
+def api_update_service_instance(instance_id):
+    inst = db.session.get(ServiceInstance, instance_id)
+    if not inst:
+        return jsonify({"error": "Service instance not found"}), 404
+
+    data = request.get_json(force=True)
+    if "display_name_override" in data:
+        inst.display_name_override = (data.get("display_name_override") or "").strip() or None
+    if "description_override" in data:
+        inst.description_override = (data.get("description_override") or "").strip() or None
+    if "sort_order" in data:
+        inst.sort_order = int(data.get("sort_order"))
+    if "config_dir_path" in data:
+        inst.config_dir_path = (data.get("config_dir_path") or "").strip() or None
+        inst.config_dir_source = "manual" if inst.config_dir_path else inst.config_dir_source
+    if "config_sync_state" in data:
+        inst.config_sync_state = (data.get("config_sync_state") or "").strip() or inst.config_sync_state
+
+    inst.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(inst.to_dict())
+
+
+@app.route("/api/service-instances/<int:instance_id>", methods=["DELETE"])
+def api_delete_service_instance(instance_id):
+    inst = db.session.get(ServiceInstance, instance_id)
+    if not inst:
+        return jsonify({"error": "Service instance not found"}), 404
+    db.session.delete(inst)
+    db.session.commit()
+    return jsonify({"message": "Service instance deleted."})
+
+
+@app.route("/api/service-instances/<int:instance_id>/sync-config", methods=["POST"])
+def api_trigger_service_instance_sync(instance_id):
+    inst = db.session.get(ServiceInstance, instance_id)
+    if not inst:
+        return jsonify({"error": "Service instance not found"}), 404
+
+    inst.config_sync_state = "pending"
+    inst.config_sync_message = None
+    _queue_config_sync(instance_id, priority=10)
+    db.session.commit()
+    return jsonify({"message": "Config sync queued.", "instance": inst.to_dict()})
 
 
 # ---------------------------------------------------------------------------

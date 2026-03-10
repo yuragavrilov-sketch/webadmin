@@ -16,11 +16,17 @@ class Server(db.Model):
     password_enc = db.Column(db.Text, nullable=False)
     use_ssl = db.Column(db.Boolean, nullable=False, default=False)
     description = db.Column(db.Text, nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    last_winrm_check_at = db.Column(db.DateTime, nullable=True)
+    last_winrm_check_ok = db.Column(db.Boolean, nullable=True)
+    last_winrm_check_message = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     logs = db.relationship("AuditLog", backref="server", lazy=True, cascade="all, delete-orphan")
     service_configs = db.relationship("ServiceConfig", backref="server", lazy=True, cascade="all, delete-orphan", order_by="ServiceConfig.sort_order")
+    env_links = db.relationship("EnvServer", backref="server", lazy=True, cascade="all, delete-orphan")
+    service_instances = db.relationship("ServiceInstance", backref="server", lazy=True, cascade="all, delete-orphan")
 
     def to_dict(self):
         return {
@@ -31,8 +37,184 @@ class Server(db.Model):
             "username": self.username,
             "use_ssl": self.use_ssl,
             "description": self.description,
+            "is_active": self.is_active,
+            "last_winrm_check_at": self.last_winrm_check_at.isoformat() if self.last_winrm_check_at else None,
+            "last_winrm_check_ok": self.last_winrm_check_ok,
+            "last_winrm_check_message": self.last_winrm_check_message,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class Environment(db.Model):
+    __tablename__ = "envs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(50), nullable=False, unique=True)
+    name = db.Column(db.String(100), nullable=False, unique=True)
+    description = db.Column(db.Text, nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    server_links = db.relationship("EnvServer", backref="env", lazy=True, cascade="all, delete-orphan")
+    service_instances = db.relationship("ServiceInstance", backref="env", lazy=True, cascade="all, delete-orphan")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "code": self.code,
+            "name": self.name,
+            "description": self.description or "",
+            "is_active": self.is_active,
+            "sort_order": self.sort_order,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class EnvServer(db.Model):
+    __tablename__ = "env_servers"
+    __table_args__ = (
+        db.UniqueConstraint("env_id", "server_id", name="uq_env_server"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    env_id = db.Column(db.Integer, db.ForeignKey("envs.id", ondelete="CASCADE"), nullable=False)
+    server_id = db.Column(db.Integer, db.ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    winrm_enabled = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "env_id": self.env_id,
+            "server_id": self.server_id,
+            "winrm_enabled": self.winrm_enabled,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "server": self.server.to_dict() if self.server else None,
+        }
+
+
+class ManagedService(db.Model):
+    __tablename__ = "services"
+
+    id = db.Column(db.Integer, primary_key=True)
+    service_name = db.Column(db.String(255), nullable=False, unique=True)
+    display_name_default = db.Column(db.String(255), nullable=True)
+    description = db.Column(db.Text, nullable=True)
+    owner_team = db.Column(db.String(100), nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    instances = db.relationship("ServiceInstance", backref="service", lazy=True, cascade="all, delete-orphan")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "service_name": self.service_name,
+            "display_name_default": self.display_name_default or "",
+            "description": self.description or "",
+            "owner_team": self.owner_team or "",
+            "is_active": self.is_active,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class ServiceInstance(db.Model):
+    __tablename__ = "service_instances"
+    __table_args__ = (
+        db.UniqueConstraint("env_id", "server_id", "service_id", name="uq_service_instance_env_server_service"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    env_id = db.Column(db.Integer, db.ForeignKey("envs.id", ondelete="CASCADE"), nullable=False)
+    server_id = db.Column(db.Integer, db.ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    service_id = db.Column(db.Integer, db.ForeignKey("services.id", ondelete="CASCADE"), nullable=False)
+    display_name_override = db.Column(db.String(255), nullable=True)
+    description_override = db.Column(db.Text, nullable=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    status_cache = db.Column(db.String(50), nullable=True)
+    status_cache_at = db.Column(db.DateTime, nullable=True)
+    last_discovery_at = db.Column(db.DateTime, nullable=True)
+    exe_path = db.Column(db.String(1000), nullable=True)
+    config_dir_path = db.Column(db.String(1000), nullable=True)
+    config_dir_detected_at = db.Column(db.DateTime, nullable=True)
+    config_dir_source = db.Column(db.String(20), nullable=True)
+    config_sync_state = db.Column(db.String(20), nullable=False, default="pending")
+    config_sync_message = db.Column(db.Text, nullable=True)
+    last_config_sync_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    sync_jobs = db.relationship(
+        "ConfigSyncJob",
+        backref="service_instance",
+        lazy=True,
+        cascade="all, delete-orphan",
+        order_by="ConfigSyncJob.id.desc()",
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "env_id": self.env_id,
+            "server_id": self.server_id,
+            "service_id": self.service_id,
+            "env_code": self.env.code if self.env else None,
+            "server_name": self.server.name if self.server else None,
+            "service_name": self.service.service_name if self.service else None,
+            "display_name_override": self.display_name_override or "",
+            "description_override": self.description_override or "",
+            "sort_order": self.sort_order,
+            "status_cache": self.status_cache,
+            "status_cache_at": self.status_cache_at.isoformat() if self.status_cache_at else None,
+            "last_discovery_at": self.last_discovery_at.isoformat() if self.last_discovery_at else None,
+            "exe_path": self.exe_path,
+            "config_dir_path": self.config_dir_path,
+            "config_dir_detected_at": self.config_dir_detected_at.isoformat() if self.config_dir_detected_at else None,
+            "config_dir_source": self.config_dir_source,
+            "config_sync_state": self.config_sync_state,
+            "config_sync_message": self.config_sync_message,
+            "last_config_sync_at": self.last_config_sync_at.isoformat() if self.last_config_sync_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class ConfigSyncJob(db.Model):
+    __tablename__ = "config_sync_jobs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    service_instance_id = db.Column(
+        db.Integer, db.ForeignKey("service_instances.id", ondelete="CASCADE"), nullable=False
+    )
+    job_type = db.Column(db.String(30), nullable=False, default="sync_config")
+    status = db.Column(db.String(20), nullable=False, default="queued")
+    attempt = db.Column(db.Integer, nullable=False, default=0)
+    priority = db.Column(db.Integer, nullable=False, default=100)
+    scheduled_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    started_at = db.Column(db.DateTime, nullable=True)
+    finished_at = db.Column(db.DateTime, nullable=True)
+    error_text = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "service_instance_id": self.service_instance_id,
+            "job_type": self.job_type,
+            "status": self.status,
+            "attempt": self.attempt,
+            "priority": self.priority,
+            "scheduled_at": self.scheduled_at.isoformat() if self.scheduled_at else None,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "error_text": self.error_text,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 

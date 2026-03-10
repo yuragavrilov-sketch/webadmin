@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block title %}ENV — Service Portal{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h4 class="mb-0"><i class="bi bi-diagram-3 me-2"></i>Справочник ENV</h4>
+  <button class="btn btn-primary" onclick="openAddModal()">
+    <i class="bi bi-plus-lg me-1"></i>Добавить ENV
+  </button>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    <div id="loading" class="text-center py-5">
+      <div class="spinner-border text-primary"></div>
+    </div>
+    <div class="table-responsive d-none" id="table-wrap">
+      <table class="table table-hover mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Code</th>
+            <th>Название</th>
+            <th>Описание</th>
+            <th>Порядок</th>
+            <th>Статус</th>
+            <th class="text-end">Действия</th>
+          </tr>
+        </thead>
+        <tbody id="envs-tbody"></tbody>
+      </table>
+    </div>
+    <div id="empty-msg" class="text-center py-5 text-muted d-none">
+      <i class="bi bi-diagram-3 fs-1 d-block mb-2"></i>
+      ENV не добавлены
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="envModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modal-title">Добавить ENV</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="edit-id" />
+        <div class="row g-3">
+          <div class="col-4">
+            <label class="form-label">Code *</label>
+            <input class="form-control" id="f-code" placeholder="DEV" />
+          </div>
+          <div class="col-8">
+            <label class="form-label">Название *</label>
+            <input class="form-control" id="f-name" placeholder="Development" />
+          </div>
+          <div class="col-12">
+            <label class="form-label">Описание</label>
+            <input class="form-control" id="f-description" />
+          </div>
+          <div class="col-6">
+            <label class="form-label">Порядок</label>
+            <input class="form-control" id="f-sort" type="number" value="10" />
+          </div>
+          <div class="col-6">
+            <label class="form-label d-block">Активность</label>
+            <div class="form-check form-switch mt-2">
+              <input class="form-check-input" type="checkbox" id="f-active" checked />
+              <label class="form-check-label" for="f-active">is_active</label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-primary" id="btn-save">Сохранить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="deleteModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Удалить ENV</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">Удалить <strong id="del-name"></strong>?</div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-danger" id="btn-confirm-delete">Удалить</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const envModal = new bootstrap.Modal(document.getElementById('envModal'));
+const deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
+let deleteId = null;
+
+function openAddModal() {
+  document.getElementById('modal-title').textContent = 'Добавить ENV';
+  document.getElementById('edit-id').value = '';
+  document.getElementById('f-code').value = '';
+  document.getElementById('f-name').value = '';
+  document.getElementById('f-description').value = '';
+  document.getElementById('f-sort').value = 10;
+  document.getElementById('f-active').checked = true;
+  envModal.show();
+}
+
+function openEditModal(e) {
+  document.getElementById('modal-title').textContent = 'Редактировать ENV';
+  document.getElementById('edit-id').value = e.id;
+  document.getElementById('f-code').value = e.code || '';
+  document.getElementById('f-name').value = e.name || '';
+  document.getElementById('f-description').value = e.description || '';
+  document.getElementById('f-sort').value = e.sort_order ?? 10;
+  document.getElementById('f-active').checked = !!e.is_active;
+  envModal.show();
+}
+
+document.getElementById('btn-save').addEventListener('click', async () => {
+  const id = document.getElementById('edit-id').value;
+  const body = {
+    code: document.getElementById('f-code').value.trim(),
+    name: document.getElementById('f-name').value.trim(),
+    description: document.getElementById('f-description').value.trim(),
+    sort_order: parseInt(document.getElementById('f-sort').value || '0', 10),
+    is_active: document.getElementById('f-active').checked,
+  };
+  if (!body.code || !body.name) {
+    showToast('Заполните code и название', 'warning');
+    return;
+  }
+  const { ok, data } = await apiCall(id ? `/api/envs/${id}` : '/api/envs', id ? 'PUT' : 'POST', body);
+  if (!ok) {
+    showToast(data.error || 'Ошибка сохранения', 'danger');
+    return;
+  }
+  envModal.hide();
+  showToast(id ? 'ENV обновлён' : 'ENV добавлен', 'success');
+  await loadEnvs();
+});
+
+function confirmDelete(id, name) {
+  deleteId = id;
+  document.getElementById('del-name').textContent = name;
+  deleteModal.show();
+}
+
+document.getElementById('btn-confirm-delete').addEventListener('click', async () => {
+  const { ok, data } = await apiCall(`/api/envs/${deleteId}`, 'DELETE');
+  deleteModal.hide();
+  if (!ok) {
+    showToast(data.error || 'Ошибка удаления', 'danger');
+    return;
+  }
+  showToast('ENV удалён', 'success');
+  await loadEnvs();
+});
+
+function esc(v) {
+  const d = document.createElement('div'); d.textContent = v || ''; return d.innerHTML;
+}
+
+function renderEnvs(list) {
+  document.getElementById('loading').classList.add('d-none');
+  const wrap = document.getElementById('table-wrap');
+  const empty = document.getElementById('empty-msg');
+  if (!list.length) {
+    wrap.classList.add('d-none');
+    empty.classList.remove('d-none');
+    return;
+  }
+  empty.classList.add('d-none');
+  wrap.classList.remove('d-none');
+  document.getElementById('envs-tbody').innerHTML = list.map(e => `
+    <tr>
+      <td><span class="badge bg-dark">${esc(e.code)}</span></td>
+      <td>${esc(e.name)}</td>
+      <td class="text-muted small">${esc(e.description || '')}</td>
+      <td>${e.sort_order ?? ''}</td>
+      <td>${e.is_active ? '<span class="badge bg-success">active</span>' : '<span class="badge bg-secondary">inactive</span>'}</td>
+      <td class="text-end text-nowrap">
+        <button class="btn btn-sm btn-outline-dark me-1" onclick='openEditModal(${JSON.stringify(e)})'>
+          <i class="bi bi-pencil"></i>
+        </button>
+        <button class="btn btn-sm btn-outline-danger" onclick="confirmDelete(${e.id}, '${esc(e.name)}')">
+          <i class="bi bi-trash"></i>
+        </button>
+      </td>
+    </tr>`).join('');
+}
+
+async function loadEnvs() {
+  const { ok, data } = await apiCall('/api/envs');
+  if (!ok) {
+    showToast('Не удалось загрузить ENV', 'danger');
+    return;
+  }
+  renderEnvs(data);
+}
+
+loadEnvs();
+</script>
+{% endblock %}
