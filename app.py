@@ -2,7 +2,7 @@ from flask import Flask, jsonify, request, render_template, abort
 from cryptography.fernet import Fernet, InvalidToken
 from config import Config
 from collections import defaultdict
-from models import db, Server, AuditLog, ServiceConfig, ServiceGroup, ServiceGroupItem
+from models import db, Server, AuditLog, ServiceConfig, ServiceGroup, ServiceGroupItem, ConfigSnapshot, ConfigSnapshotFile
 from winrm_manager import WinRMManager, WinRMError
 from datetime import datetime
 
@@ -311,8 +311,8 @@ def api_service_action(server_id, service_name):
     if not server:
         return jsonify({"error": "Server not found"}), 404
 
-    # Verify the service is in the configured list
-    if not ServiceConfig.query.filter_by(server_id=server_id, service_name=service_name).first():
+    cfg_record = ServiceConfig.query.filter_by(server_id=server_id, service_name=service_name).first()
+    if not cfg_record:
         return jsonify({"error": f"Service '{service_name}' is not configured for this server."}), 403
 
     data = request.get_json(force=True)
@@ -324,6 +324,15 @@ def api_service_action(server_id, service_name):
     message = ""
     try:
         mgr = get_winrm(server)
+
+        # Auto-snapshot before the action if a config_dir is configured
+        if cfg_record.config_dir:
+            try:
+                from scheduler import take_snapshot
+                take_snapshot(db, mgr, cfg_record, comment=f"pre-action:{action}")
+            except Exception as snap_err:
+                app.logger.warning("Pre-action snapshot failed for %s: %s", service_name, snap_err)
+
         if action == "start":
             message = mgr.start_service(service_name)
         elif action == "stop":
@@ -755,6 +764,107 @@ def api_group_action(group_id):
 
 
 # ---------------------------------------------------------------------------
+# API — Config snapshots
+# ---------------------------------------------------------------------------
+
+@app.route("/api/service-configs/<int:cfg_id>/config-dir", methods=["PUT"])
+def api_update_config_dir(cfg_id):
+    """Set (or clear) the config_dir path for a service config."""
+    cfg = db.session.get(ServiceConfig, cfg_id)
+    if not cfg:
+        return jsonify({"error": "Not found"}), 404
+    data = request.get_json(force=True)
+    cfg.config_dir = (data.get("config_dir") or "").strip() or None
+    db.session.commit()
+    return jsonify(cfg.to_dict())
+
+
+@app.route("/api/service-configs/<int:cfg_id>/detect-config-dir", methods=["POST"])
+def api_detect_config_dir(cfg_id):
+    """Auto-detect Config/ directory from the service exe path via WinRM."""
+    cfg = db.session.get(ServiceConfig, cfg_id)
+    if not cfg:
+        return jsonify({"error": "Not found"}), 404
+    try:
+        detected = get_winrm(cfg.server).get_service_config_dir(cfg.service_name)
+        return jsonify({"config_dir": detected})
+    except (WinRMError, Exception) as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/service-configs/<int:cfg_id>/snapshots", methods=["GET"])
+def api_list_snapshots(cfg_id):
+    cfg = db.session.get(ServiceConfig, cfg_id)
+    if not cfg:
+        return jsonify({"error": "Not found"}), 404
+    snaps = (ConfigSnapshot.query
+             .filter_by(service_config_id=cfg_id)
+             .order_by(ConfigSnapshot.created_at.desc())
+             .all())
+    return jsonify([s.to_dict() for s in snaps])
+
+
+@app.route("/api/service-configs/<int:cfg_id>/snapshots/<int:snap_id>", methods=["GET"])
+def api_get_snapshot(cfg_id, snap_id):
+    snap = ConfigSnapshot.query.filter_by(id=snap_id, service_config_id=cfg_id).first()
+    if not snap:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(snap.to_dict(include_files=True))
+
+
+@app.route("/api/service-configs/<int:cfg_id>/snapshots", methods=["POST"])
+def api_create_snapshot_manual(cfg_id):
+    """Manually trigger a snapshot for one service config."""
+    cfg = db.session.get(ServiceConfig, cfg_id)
+    if not cfg:
+        return jsonify({"error": "Not found"}), 404
+    if not cfg.config_dir:
+        return jsonify({"error": "config_dir not set for this service config"}), 400
+    try:
+        from scheduler import take_snapshot
+        created = take_snapshot(db, get_winrm(cfg.server), cfg, comment="manual")
+        return jsonify({"created": created})
+    except (WinRMError, Exception) as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/service-configs/<int:cfg_id>/snapshots/<int:snap_id>", methods=["DELETE"])
+def api_delete_snapshot(cfg_id, snap_id):
+    snap = ConfigSnapshot.query.filter_by(id=snap_id, service_config_id=cfg_id).first()
+    if not snap:
+        return jsonify({"error": "Not found"}), 404
+    db.session.delete(snap)
+    db.session.commit()
+    return jsonify({"message": "Deleted."})
+
+
+# ---------------------------------------------------------------------------
+# API — Scheduler status / control
+# ---------------------------------------------------------------------------
+
+@app.route("/api/scheduler/status", methods=["GET"])
+def api_scheduler_status():
+    from scheduler import get_scheduler, get_last_run
+    sched = get_scheduler()
+    job = sched.get_job("config_poll") if sched else None
+    return jsonify({
+        "running": bool(sched and sched.running),
+        "interval_minutes": app.config.get("CONFIG_POLL_INTERVAL_MINUTES", 60),
+        "next_run": job.next_run_time.isoformat() if job and job.next_run_time else None,
+        "last_run": get_last_run(),
+    })
+
+
+@app.route("/api/scheduler/run-now", methods=["POST"])
+def api_scheduler_run_now():
+    """Trigger an immediate full config poll in a background thread."""
+    import threading
+    from scheduler import poll_configs
+    threading.Thread(target=poll_configs, args=[app], daemon=True).start()
+    return jsonify({"message": "Config poll started in background."})
+
+
+# ---------------------------------------------------------------------------
 # API — Audit logs
 # ---------------------------------------------------------------------------
 
@@ -777,4 +887,7 @@ def api_list_logs():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    from scheduler import start_scheduler
+    start_scheduler(app)
+    # use_reloader=False prevents APScheduler from starting twice in debug mode
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)

@@ -45,8 +45,14 @@ class ServiceConfig(db.Model):
     service_name = db.Column(db.String(255), nullable=False)   # actual Windows service name
     display_name = db.Column(db.String(255), nullable=True)    # optional label override
     description = db.Column(db.Text, nullable=True)
+    config_dir = db.Column(db.String(1000), nullable=True)     # remote path to Config/ folder
     sort_order = db.Column(db.Integer, nullable=False, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    snapshots = db.relationship(
+        "ConfigSnapshot", backref="service_config", lazy=True,
+        cascade="all, delete-orphan",
+    )
 
     def to_dict(self):
         return {
@@ -55,6 +61,7 @@ class ServiceConfig(db.Model):
             "service_name": self.service_name,
             "display_name": self.display_name or "",
             "description": self.description or "",
+            "config_dir": self.config_dir or "",
             "sort_order": self.sort_order,
         }
 
@@ -114,6 +121,57 @@ class ServiceGroupItem(db.Model):
             "display_name": cfg.display_name or "" if cfg else "",
             "description": cfg.description or "" if cfg else "",
             "sort_order": self.sort_order,
+        }
+
+
+class ConfigSnapshot(db.Model):
+    """Point-in-time snapshot of all files in a service's Config/ directory."""
+    __tablename__ = "config_snapshots"
+
+    id = db.Column(db.Integer, primary_key=True)
+    service_config_id = db.Column(
+        db.Integer, db.ForeignKey("service_configs.id", ondelete="CASCADE"), nullable=False
+    )
+    # source: "auto" (scheduler), "manual", "pre-action:start", "pre-action:stop", "pre-action:restart"
+    comment = db.Column(db.String(200), nullable=True)
+    content_hash = db.Column(db.String(64), nullable=False)  # sha256 for change detection
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    files = db.relationship(
+        "ConfigSnapshotFile", backref="snapshot", lazy=True, cascade="all, delete-orphan"
+    )
+
+    def to_dict(self, include_files: bool = False):
+        d = {
+            "id": self.id,
+            "service_config_id": self.service_config_id,
+            "comment": self.comment or "",
+            "content_hash": self.content_hash,
+            "file_count": len(self.files),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+        if include_files:
+            d["files"] = [f.to_dict() for f in self.files]
+        return d
+
+
+class ConfigSnapshotFile(db.Model):
+    """A single file captured inside a ConfigSnapshot."""
+    __tablename__ = "config_snapshot_files"
+
+    id = db.Column(db.Integer, primary_key=True)
+    snapshot_id = db.Column(
+        db.Integer, db.ForeignKey("config_snapshots.id", ondelete="CASCADE"), nullable=False
+    )
+    relative_path = db.Column(db.String(1000), nullable=False)
+    content = db.Column(db.Text, nullable=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "snapshot_id": self.snapshot_id,
+            "relative_path": self.relative_path,
+            "content": self.content or "",
         }
 
 

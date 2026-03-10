@@ -31,6 +31,19 @@ def init_db():
     with app.app_context():
         db.create_all()
         print("[+] Database tables created successfully.")
+
+        # Migrate existing service_configs table: add config_dir if missing
+        from sqlalchemy import inspect, text
+        inspector = inspect(db.engine)
+        existing_cols = {c["name"] for c in inspector.get_columns("service_configs")}
+        if "config_dir" not in existing_cols:
+            with db.engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE service_configs ADD COLUMN config_dir VARCHAR(1000)"
+                ))
+                conn.commit()
+            print("[+] Migrated: added config_dir column to service_configs.")
+
         print("[+] Ready to start: python app.py")
 
 

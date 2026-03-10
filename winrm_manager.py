@@ -191,6 +191,57 @@ if (-not $s) {{ Write-Error "Service not found: {safe}"; exit 1 }}
             raise WinRMError(stderr or "Failed to restart service")
         return stdout
 
+    # Text-based extensions collected during config snapshots
+    _TEXT_EXTENSIONS = (
+        ".json", ".xml", ".config", ".ini", ".yaml", ".yml",
+        ".txt", ".properties", ".toml", ".cfg", ".conf", ".env",
+    )
+
+    def get_service_config_dir(self, service_name: str) -> str:
+        """Derive the Config/ path from the service exe via CIM. Returns '' if not found."""
+        safe = service_name.replace("'", "")
+        script = f"""
+$s = Get-CimInstance Win32_Service -Filter "Name='{safe}'" -ErrorAction SilentlyContinue
+if (-not $s) {{ Write-Output ''; exit 0 }}
+$exe = ($s.PathName -replace '"', '' -split ' ')[0]
+$dir = Split-Path $exe -Parent
+$cfg = Join-Path $dir 'Config'
+if (Test-Path $cfg) {{ $cfg }} else {{ '' }}
+"""
+        stdout, stderr, code = self._run_ps(script)
+        if code != 0:
+            raise WinRMError(f"Cannot detect Config dir for '{service_name}': {stderr}")
+        return stdout.strip()
+
+    def list_config_files(self, config_dir: str) -> list[str]:
+        """Return relative paths of text config files inside *config_dir* (recursive)."""
+        safe = config_dir.replace("'", "").replace('"', "")
+        includes = " ".join(f"'*{ext}'" for ext in self._TEXT_EXTENSIONS)
+        script = f"""
+$base = '{safe}'
+if (-not (Test-Path $base)) {{ Write-Output '[]'; exit 0 }}
+$files = Get-ChildItem -Path $base -Recurse -File -Include {includes} |
+    ForEach-Object {{ $_.FullName.Substring($base.Length).TrimStart('\\') }}
+if ($files) {{ $files | ConvertTo-Json -Compress }} else {{ Write-Output '[]' }}
+"""
+        stdout, stderr, code = self._run_ps(script)
+        if code != 0:
+            raise WinRMError(f"Cannot list config files in '{config_dir}': {stderr}")
+        stdout = stdout.strip()
+        if not stdout or stdout == "null":
+            return []
+        raw = json.loads(stdout)
+        return [raw] if isinstance(raw, str) else list(raw)
+
+    def read_config_file(self, file_path: str) -> str:
+        """Read a remote text file as UTF-8 string."""
+        safe = file_path.replace("'", "").replace('"', "")
+        script = f"Get-Content -Path '{safe}' -Raw -Encoding UTF8 -ErrorAction Stop"
+        stdout, stderr, code = self._run_ps(script)
+        if code != 0:
+            raise WinRMError(f"Cannot read '{file_path}': {stderr}")
+        return stdout
+
     def test_connection(self) -> tuple[bool, str]:
         try:
             stdout, stderr, code = self._run_ps("$env:COMPUTERNAME")

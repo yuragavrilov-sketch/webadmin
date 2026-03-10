@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install APScheduler==3.10.4)",
+      "Bash(python -c \"import scheduler; import models; print\\(''OK''\\)\")"
+    ]
+  }
+}

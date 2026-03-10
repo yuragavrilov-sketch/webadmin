@@ -12,3 +12,4 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "").encode()
     WINRM_TIMEOUT = int(os.getenv("WINRM_TIMEOUT", 30))
+    CONFIG_POLL_INTERVAL_MINUTES = int(os.getenv("CONFIG_POLL_INTERVAL_MINUTES", 60))
