@@ -1,6 +1,23 @@
 {% extends "base.html" %}
 {% block title %}Группы — Service Portal{% endblock %}
 
+{% block head %}
+<style>
+  .group-accordion .accordion-button { font-weight: 600; }
+  .group-accordion .accordion-button:not(.collapsed) { background: #f8f9fa; }
+  .tree-server { font-size: .8rem; font-weight: 600; color: #6c757d;
+                 padding: .4rem .75rem; background: #f8f9fa; border-radius: 4px; margin-bottom: .25rem; }
+  .tree-service { display: flex; align-items: center; gap: .5rem;
+                  padding: .35rem .5rem .35rem 1.5rem; border-bottom: 1px solid #f0f0f0; }
+  .tree-service:last-child { border-bottom: none; }
+  .tree-service:hover { background: #f8f9fa; }
+  .tree-service .svc-name { font-family: monospace; font-size: .82rem; min-width: 160px; }
+  .tree-service .svc-label { color: #6c757d; font-size: .82rem; flex: 1; }
+  .color-dot { width: 14px; height: 14px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  .tree-connector { color: #ced4da; margin-right: .25rem; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
   <h4 class="mb-0"><i class="bi bi-collection me-2"></i>Группы сервисов</h4>
@@ -9,16 +26,16 @@
   </button>
 </div>
 
-<div id="loading" class="text-center py-5">
+<div id="page-loading" class="text-center py-5">
   <div class="spinner-border text-primary"></div>
 </div>
 
-<div id="groups-container" class="row g-3 d-none"></div>
-
 <div id="empty-msg" class="text-center py-5 text-muted d-none">
   <i class="bi bi-collection fs-1 d-block mb-2"></i>
-  Группы не созданы
+  Группы не созданы. <button class="btn btn-link p-0 align-baseline" onclick="openGroupModal()">Создать первую группу</button>
 </div>
+
+<div class="accordion group-accordion d-none" id="groups-accordion"></div>
 
 <!-- ===================== Create / Edit Group Modal ===================== -->
 <div class="modal fade" id="groupModal" tabindex="-1">
@@ -38,12 +55,14 @@
           <label class="form-label">Описание</label>
           <input type="text" class="form-control" id="gm-desc" />
         </div>
-        <div class="mb-3">
+        <div class="mb-1">
           <label class="form-label">Цвет</label>
-          <div class="d-flex gap-2 flex-wrap" id="color-picker">
-            {% for color in ['primary','success','danger','warning','info','secondary','dark'] %}
-            <button type="button" class="btn btn-{{ color }} btn-sm color-opt" data-color="{{ color }}"
-                    style="width:36px;height:36px;border-radius:50%">
+          <div class="d-flex gap-2 flex-wrap">
+            {% for c in [('primary','#0d6efd'),('success','#198754'),('danger','#dc3545'),('warning','#ffc107'),('info','#0dcaf0'),('secondary','#6c757d'),('dark','#212529')] %}
+            <button type="button" class="color-opt border-0 p-0"
+                    data-color="{{ c[0] }}"
+                    style="width:30px;height:30px;border-radius:50%;background:{{ c[1] }};outline:2px solid transparent;outline-offset:2px"
+                    title="{{ c[0] }}">
             </button>
             {% endfor %}
           </div>
@@ -58,64 +77,28 @@
   </div>
 </div>
 
-<!-- ===================== Group Members Modal ===================== -->
-<div class="modal fade modal-xl" id="membersModal" tabindex="-1">
-  <div class="modal-dialog modal-xl">
+<!-- ===================== Add Member Modal ===================== -->
+<div class="modal fade" id="addMemberModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title">
-          <i class="bi bi-gear me-2"></i>Состав группы:
-          <span id="mm-group-name" class="fw-bold"></span>
-        </h5>
+        <h5 class="modal-title">Добавить сервис в группу <strong id="am-group-name"></strong></h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <div class="row g-3">
-
-          <!-- Left: current members -->
-          <div class="col-md-6">
-            <div class="d-flex justify-content-between mb-2">
-              <span class="fw-semibold">Текущие участники</span>
-              <span class="text-muted small" id="mm-count"></span>
-            </div>
-            <div id="mm-loading" class="text-center py-3 d-none">
-              <div class="spinner-border spinner-border-sm text-primary"></div>
-            </div>
-            <div id="mm-empty" class="text-center text-muted py-3 d-none">
-              <i class="bi bi-inbox fs-3 d-block mb-1"></i>В группе нет сервисов
-            </div>
-            <div class="table-responsive">
-              <table class="table table-sm table-hover mb-0" id="mm-table">
-                <thead class="table-light">
-                  <tr><th>Сервер</th><th>Сервис</th><th>Метка</th><th></th></tr>
-                </thead>
-                <tbody id="mm-tbody"></tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Right: add members -->
-          <div class="col-md-6">
-            <div class="fw-semibold mb-2">Добавить сервис</div>
-            <input type="text" class="form-control form-control-sm mb-2" id="mm-search"
-                   placeholder="Поиск по серверу / имени..." />
-            <div id="mm-picker-loading" class="text-center py-3 d-none">
-              <div class="spinner-border spinner-border-sm text-primary"></div>
-            </div>
-            <div class="table-responsive" style="max-height:380px;overflow-y:auto">
-              <table class="table table-sm table-hover mb-0" id="mm-picker-table">
-                <thead class="table-light sticky-top">
-                  <tr><th>Сервер</th><th>Сервис</th><th>Метка</th><th></th></tr>
-                </thead>
-                <tbody id="mm-picker-tbody"></tbody>
-              </table>
-            </div>
-          </div>
-
+        <input type="text" class="form-control form-control-sm mb-3" id="am-search"
+               placeholder="Поиск по серверу / сервису..." />
+        <div id="am-loading" class="text-center py-3 d-none">
+          <div class="spinner-border spinner-border-sm text-primary"></div>
         </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button>
+        <div class="table-responsive" style="max-height:420px;overflow-y:auto">
+          <table class="table table-sm table-hover mb-0" id="am-table" style="display:none">
+            <thead class="table-light sticky-top">
+              <tr><th>Сервер</th><th>Системное имя</th><th>Метка</th><th></th></tr>
+            </thead>
+            <tbody id="am-tbody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -142,27 +125,27 @@
 {% block scripts %}
 <script>
 const groupModal      = new bootstrap.Modal(document.getElementById('groupModal'));
-const membersModal    = new bootstrap.Modal(document.getElementById('membersModal'));
+const addMemberModal  = new bootstrap.Modal(document.getElementById('addMemberModal'));
 const deleteGroupModal = new bootstrap.Modal(document.getElementById('deleteGroupModal'));
 
+const BG_COLORS = {
+  primary: '#0d6efd', success: '#198754', danger: '#dc3545',
+  warning: '#ffc107', info: '#0dcaf0', secondary: '#6c757d', dark: '#212529'
+};
+
 let deleteGroupId = null;
-let currentGroupId = null;
-let allConfigs = [];   // /api/service-configs
-let currentMembers = []; // item ids in current group
+let addMemberGroupId = null;
+let allConfigs = [];         // cache from /api/service-configs
+let groupMemberIds = new Set(); // service_config_ids already in the target group
 
 // ── Color picker ─────────────────────────────────────────────────────────────
 document.querySelectorAll('.color-opt').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.color-opt').forEach(b => b.style.outline = '');
-    btn.style.outline = '3px solid #000';
-    document.getElementById('gm-color').value = btn.dataset.color;
-  });
+  btn.addEventListener('click', () => setColorPicker(btn.dataset.color));
 });
 
 function setColorPicker(color) {
-  document.querySelectorAll('.color-opt').forEach(b => {
-    b.style.outline = b.dataset.color === color ? '3px solid #000' : '';
-  });
+  document.querySelectorAll('.color-opt').forEach(b =>
+    b.style.outlineColor = b.dataset.color === color ? '#000' : 'transparent');
   document.getElementById('gm-color').value = color;
 }
 
@@ -184,160 +167,217 @@ document.getElementById('btn-save-group').addEventListener('click', async () => 
     color: document.getElementById('gm-color').value,
   };
   if (!body.name) { showToast('Введите название группы', 'warning'); return; }
-
-  const { ok, data } = await apiCall(
-    id ? `/api/groups/${id}` : '/api/groups',
-    id ? 'PUT' : 'POST', body
-  );
-  if (ok) {
-    groupModal.hide();
-    showToast(id ? 'Группа обновлена' : 'Группа создана', 'success');
-    await loadGroups();
-  } else {
-    showToast(data.error || 'Ошибка', 'danger');
-  }
+  const { ok, data } = await apiCall(id ? `/api/groups/${id}` : '/api/groups', id ? 'PUT' : 'POST', body);
+  if (ok) { groupModal.hide(); showToast(id ? 'Обновлено' : 'Группа создана', 'success'); await loadGroups(); }
+  else showToast(data.error || 'Ошибка', 'danger');
 });
 
 function confirmDeleteGroup(id, name) {
-  deleteGroupId = id;
-  document.getElementById('dg-name').textContent = name;
-  deleteGroupModal.show();
+  deleteGroupId = id; document.getElementById('dg-name').textContent = name; deleteGroupModal.show();
 }
-
 document.getElementById('btn-confirm-del-group').addEventListener('click', async () => {
-  if (!deleteGroupId) return;
   const { ok, data } = await apiCall(`/api/groups/${deleteGroupId}`, 'DELETE');
   deleteGroupModal.hide();
-  if (ok) { showToast('Группа удалена', 'success'); await loadGroups(); }
+  if (ok) { showToast('Удалено', 'success'); await loadGroups(); }
   else showToast(data.error || 'Ошибка', 'danger');
 });
 
-// ── Members modal ────────────────────────────────────────────────────────────
-async function openMembersModal(groupId, groupName) {
-  currentGroupId = groupId;
-  document.getElementById('mm-group-name').textContent = groupName;
-  document.getElementById('mm-search').value = '';
-  membersModal.show();
-  await Promise.all([loadMembers(), loadAllConfigs()]);
-}
+// ── Add member modal ──────────────────────────────────────────────────────────
+async function openAddMember(groupId, groupName, memberConfigIds) {
+  addMemberGroupId = groupId;
+  groupMemberIds = new Set(memberConfigIds);
+  document.getElementById('am-group-name').textContent = groupName;
+  document.getElementById('am-search').value = '';
+  addMemberModal.show();
 
-async function loadMembers() {
-  document.getElementById('mm-loading').classList.remove('d-none');
-  document.getElementById('mm-table').classList.add('d-none');
-  document.getElementById('mm-empty').classList.add('d-none');
-
-  const { ok, data } = await apiCall(`/api/groups/${currentGroupId}`);
-  document.getElementById('mm-loading').classList.add('d-none');
-  if (!ok) { showToast('Ошибка загрузки', 'danger'); return; }
-
-  currentMembers = data.items || [];
-  document.getElementById('mm-count').textContent = currentMembers.length ? `(${currentMembers.length})` : '';
-
-  if (!currentMembers.length) {
-    document.getElementById('mm-empty').classList.remove('d-none');
-  } else {
-    document.getElementById('mm-table').classList.remove('d-none');
-    document.getElementById('mm-tbody').innerHTML = currentMembers.map(m => `
-      <tr id="mm-row-${m.id}">
-        <td><span class="badge bg-secondary">${esc(m.server_name || '')}</span></td>
-        <td class="font-monospace small">${esc(m.service_name)}</td>
-        <td class="text-muted small">${esc(m.display_name || '')}</td>
-        <td class="text-end">
-          <button class="btn btn-sm btn-outline-danger" onclick="removeMember(${m.id})">
-            <i class="bi bi-x-lg"></i>
-          </button>
-        </td>
-      </tr>`).join('');
+  if (!allConfigs.length) {
+    document.getElementById('am-loading').classList.remove('d-none');
+    document.getElementById('am-table').style.display = 'none';
+    const { ok, data } = await apiCall('/api/service-configs');
+    document.getElementById('am-loading').classList.add('d-none');
+    if (ok) allConfigs = data;
   }
-
-  // Refresh picker to grey-out already-added items
-  renderPicker(allConfigs, document.getElementById('mm-search').value.toLowerCase());
+  renderPicker('');
 }
 
-async function loadAllConfigs() {
-  if (allConfigs.length) return; // cache once
-  document.getElementById('mm-picker-loading').classList.remove('d-none');
-  const { ok, data } = await apiCall('/api/service-configs');
-  document.getElementById('mm-picker-loading').classList.add('d-none');
-  if (ok) { allConfigs = data; renderPicker(data, ''); }
-}
+document.getElementById('am-search').addEventListener('input', function () {
+  renderPicker(this.value.toLowerCase());
+});
 
-function renderPicker(list, q) {
-  const memberConfigIds = new Set(currentMembers.map(m => m.service_config_id));
-  const filtered = list.filter(c => {
-    if (!q) return true;
-    return (c.server_name + ' ' + c.service_name + ' ' + c.display_name).toLowerCase().includes(q);
-  });
-  document.getElementById('mm-picker-table').style.display = filtered.length ? '' : 'none';
-  document.getElementById('mm-picker-tbody').innerHTML = filtered.map(c => {
-    const already = memberConfigIds.has(c.id);
-    return `
-      <tr class="${already ? 'text-muted' : ''}">
-        <td><span class="badge bg-secondary">${esc(c.server_name)}</span></td>
-        <td class="font-monospace small">${esc(c.service_name)}</td>
-        <td class="small">${esc(c.display_name || '')}</td>
-        <td class="text-end">
-          <button class="btn btn-sm btn-outline-primary" ${already ? 'disabled' : ''}
-                  onclick="addMember(${c.id})">
-            <i class="bi bi-plus-lg"></i>
-          </button>
-        </td>
-      </tr>`;
+function renderPicker(q) {
+  const filtered = allConfigs.filter(c =>
+    !q || (c.server_name + ' ' + c.service_name + ' ' + (c.display_name || '')).toLowerCase().includes(q)
+  );
+  const tbl = document.getElementById('am-table');
+  tbl.style.display = filtered.length ? '' : 'none';
+  document.getElementById('am-tbody').innerHTML = filtered.map(c => {
+    const inGroup = groupMemberIds.has(c.id);
+    return `<tr class="${inGroup ? 'text-muted' : ''}">
+      <td><span class="badge bg-secondary">${esc(c.server_name)}</span></td>
+      <td class="font-monospace small">${esc(c.service_name)}</td>
+      <td class="small text-muted">${esc(c.display_name || '')}</td>
+      <td class="text-end">
+        <button class="btn btn-sm btn-outline-primary" ${inGroup ? 'disabled' : ''}
+                onclick="addMember(${c.id})">
+          <i class="bi bi-plus-lg"></i>
+        </button>
+      </td>
+    </tr>`;
   }).join('');
 }
 
-document.getElementById('mm-search').addEventListener('input', function () {
-  renderPicker(allConfigs, this.value.toLowerCase());
-});
-
 async function addMember(configId) {
-  const { ok, data } = await apiCall(`/api/groups/${currentGroupId}/items`, 'POST',
+  const { ok, data } = await apiCall(`/api/groups/${addMemberGroupId}/items`, 'POST',
     { service_config_id: configId });
-  if (ok) await loadMembers();
-  else showToast(data.error || 'Ошибка', 'danger');
+  if (ok) {
+    groupMemberIds.add(configId);
+    renderPicker(document.getElementById('am-search').value.toLowerCase());
+    // Refresh the accordion item tree without closing modal
+    await refreshGroupTree(addMemberGroupId);
+  } else {
+    showToast(data.error || 'Ошибка', 'danger');
+  }
 }
 
-async function removeMember(itemId) {
-  const { ok } = await apiCall(`/api/groups/${currentGroupId}/items/${itemId}`, 'DELETE');
-  if (ok) await loadMembers();
+async function removeMember(groupId, itemId, configId) {
+  const { ok } = await apiCall(`/api/groups/${groupId}/items/${itemId}`, 'DELETE');
+  if (ok) {
+    groupMemberIds.delete(configId);
+    await refreshGroupTree(groupId);
+  }
 }
 
-// ── Groups list rendering ─────────────────────────────────────────────────────
-function renderGroups(groups) {
-  document.getElementById('loading').classList.add('d-none');
-  if (!groups.length) {
-    document.getElementById('empty-msg').classList.remove('d-none');
+// ── Tree rendering ────────────────────────────────────────────────────────────
+async function refreshGroupTree(groupId) {
+  const treeEl = document.getElementById(`tree-${groupId}`);
+  const badgeEl = document.getElementById(`badge-${groupId}`);
+  if (!treeEl) return;
+
+  treeEl.innerHTML = '<div class="text-center py-2"><div class="spinner-border spinner-border-sm text-secondary"></div></div>';
+
+  const { ok, data } = await apiCall(`/api/groups/${groupId}`);
+  if (!ok) { treeEl.innerHTML = '<div class="text-danger p-3">Ошибка загрузки</div>'; return; }
+
+  const items = data.items || [];
+  if (badgeEl) badgeEl.textContent = items.length;
+
+  if (!items.length) {
+    treeEl.innerHTML = `
+      <div class="text-center text-muted py-3 small">
+        <i class="bi bi-inbox d-block mb-1"></i>Нет сервисов в группе
+      </div>`;
     return;
   }
-  document.getElementById('groups-container').classList.remove('d-none');
-  document.getElementById('groups-container').innerHTML = groups.map(g => `
-    <div class="col-12 col-md-6 col-xl-4">
-      <div class="card h-100 border-top border-${g.color} border-3">
-        <div class="card-header d-flex justify-content-between align-items-center py-2">
-          <span>
-            <span class="badge bg-${g.color} me-2">${g.item_count}</span>
-            <strong>${esc(g.name)}</strong>
-          </span>
-          <div class="d-flex gap-1">
-            <a href="/?group=${g.id}" class="btn btn-sm btn-outline-${g.color}" title="Управление">
-              <i class="bi bi-play-circle"></i>
-            </a>
-            <button class="btn btn-sm btn-outline-secondary" onclick='openMembersModal(${g.id}, "${esc(g.name)}")' title="Состав">
-              <i class="bi bi-list-check"></i>
+
+  // Group by server
+  const byServer = {};
+  items.forEach(it => {
+    const key = it.server_name || 'Неизвестный сервер';
+    if (!byServer[key]) byServer[key] = [];
+    byServer[key].push(it);
+  });
+
+  treeEl.innerHTML = Object.entries(byServer).map(([serverName, svcs]) => `
+    <div class="px-3 py-2">
+      <div class="tree-server">
+        <i class="bi bi-hdd-network me-1"></i>${esc(serverName)}
+        <span class="badge bg-light text-dark ms-1">${svcs.length}</span>
+      </div>
+      <div>
+        ${svcs.map(svc => `
+          <div class="tree-service" id="item-${svc.id}">
+            <span class="tree-connector">└</span>
+            <i class="bi bi-gear text-muted" style="font-size:.75rem"></i>
+            <span class="svc-name">${esc(svc.service_name)}</span>
+            <span class="svc-label">${esc(svc.display_name || '')}</span>
+            <button class="btn btn-outline-danger btn-sm ms-auto py-0 px-1"
+                    style="font-size:.7rem;line-height:1.4"
+                    onclick="removeMember(${svc.group_id}, ${svc.id}, ${svc.service_config_id})"
+                    title="Удалить из группы">
+              <i class="bi bi-x-lg"></i>
             </button>
-            <button class="btn btn-sm btn-outline-dark" onclick='openGroupModal(${JSON.stringify(g)})' title="Редактировать">
-              <i class="bi bi-pencil"></i>
-            </button>
-            <button class="btn btn-sm btn-outline-danger" onclick="confirmDeleteGroup(${g.id}, '${esc(g.name)}')" title="Удалить">
-              <i class="bi bi-trash"></i>
-            </button>
+          </div>`).join('')}
+      </div>
+    </div>`).join('<hr class="my-0">');
+}
+
+// ── Accordion rendering ───────────────────────────────────────────────────────
+function renderGroups(groups) {
+  document.getElementById('page-loading').classList.add('d-none');
+
+  if (!groups.length) {
+    document.getElementById('empty-msg').classList.remove('d-none');
+    document.getElementById('groups-accordion').classList.add('d-none');
+    return;
+  }
+
+  document.getElementById('empty-msg').classList.add('d-none');
+  const acc = document.getElementById('groups-accordion');
+  acc.classList.remove('d-none');
+
+  acc.innerHTML = groups.map((g, idx) => {
+    const collapseId = `collapse-${g.id}`;
+    const headerId = `header-${g.id}`;
+    const dotColor = BG_COLORS[g.color] || '#0d6efd';
+    return `
+      <div class="accordion-item" id="group-item-${g.id}">
+        <h2 class="accordion-header" id="${headerId}">
+          <button class="accordion-button ${idx > 0 ? 'collapsed' : ''} py-2"
+                  type="button"
+                  data-bs-toggle="collapse"
+                  data-bs-target="#${collapseId}"
+                  aria-expanded="${idx === 0}"
+                  aria-controls="${collapseId}">
+            <span class="color-dot me-2" style="background:${dotColor}"></span>
+            <span class="me-2">${esc(g.name)}</span>
+            <span class="badge bg-secondary me-2" id="badge-${g.id}">${g.item_count}</span>
+            ${g.description ? `<span class="text-muted fw-normal small">${esc(g.description)}</span>` : ''}
+            <!-- Spacer to push actions right -->
+            <span class="flex-fill"></span>
+            <!-- Action buttons (stop propagation to avoid accordion toggle) -->
+            <span onclick="event.stopPropagation()" class="d-flex gap-1 me-2">
+              <a href="/?group=${g.id}" class="btn btn-sm btn-outline-${g.color}" title="Управление на главной">
+                <i class="bi bi-play-circle"></i>
+              </a>
+              <button class="btn btn-sm btn-outline-primary"
+                      onclick="openAddMember(${g.id}, '${esc(g.name)}', [])"
+                      id="add-btn-${g.id}"
+                      title="Добавить сервис">
+                <i class="bi bi-plus-lg"></i>
+              </button>
+              <button class="btn btn-sm btn-outline-dark"
+                      onclick="openGroupModal(${JSON.stringify(g)})"
+                      title="Редактировать">
+                <i class="bi bi-pencil"></i>
+              </button>
+              <button class="btn btn-sm btn-outline-danger"
+                      onclick="confirmDeleteGroup(${g.id}, '${esc(g.name)}')"
+                      title="Удалить">
+                <i class="bi bi-trash"></i>
+              </button>
+            </span>
+          </button>
+        </h2>
+        <div id="${collapseId}" class="accordion-collapse collapse ${idx === 0 ? 'show' : ''}"
+             data-bs-parent="#groups-accordion">
+          <div class="accordion-body p-0" id="tree-${g.id}">
+            <div class="text-center py-2">
+              <div class="spinner-border spinner-border-sm text-secondary"></div>
+            </div>
           </div>
         </div>
-        <div class="card-body small text-muted py-2">
-          ${g.description ? esc(g.description) : '<span class="fst-italic">Без описания</span>'}
-        </div>
-      </div>
-    </div>`).join('');
+      </div>`;
+  }).join('');
+
+  // Load tree for first group immediately; others on expand
+  if (groups.length) refreshGroupTree(groups[0].id);
+
+  acc.querySelectorAll('.accordion-collapse').forEach(el => {
+    el.addEventListener('show.bs.collapse', () => {
+      const gId = parseInt(el.id.replace('collapse-', ''));
+      refreshGroupTree(gId);
+    });
+  });
 }
 
 async function loadGroups() {
@@ -346,14 +386,21 @@ async function loadGroups() {
   else showToast('Не удалось загрузить группы', 'danger');
 }
 
+// Patch openAddMember to pre-populate groupMemberIds from the tree data
+const _origOpenAddMember = openAddMember;
+window.openAddMember = async (groupId, groupName, _ignored) => {
+  // Fetch current members fresh so the "already added" state is accurate
+  const { ok, data } = await apiCall(`/api/groups/${groupId}`);
+  const memberIds = ok ? (data.items || []).map(i => i.service_config_id) : [];
+  await _origOpenAddMember(groupId, groupName, memberIds);
+};
+
 function esc(str) {
-  const d = document.createElement('div');
-  d.textContent = str || '';
-  return d.innerHTML;
+  const d = document.createElement('div'); d.textContent = str || ''; return d.innerHTML;
 }
 
-// Reset allConfigs cache when members modal closes (in case service_configs changed)
-document.getElementById('membersModal').addEventListener('hidden.bs.modal', () => {
+// Reset configs cache when add member modal closes (picks up new service_configs)
+document.getElementById('addMemberModal').addEventListener('hidden.bs.modal', () => {
   allConfigs = [];
 });
 

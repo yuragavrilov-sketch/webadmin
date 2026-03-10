@@ -161,9 +161,20 @@
                   <input type="text" class="form-control form-control-sm" id="new-svc-label" placeholder="Диспетчер печати" />
                   <div class="form-text">Отображаемое имя (если пусто — берётся с сервера)</div>
                 </div>
-                <div class="mb-3">
+                <div class="mb-2">
                   <label class="form-label small mb-1">Описание</label>
                   <input type="text" class="form-control form-control-sm" id="new-svc-desc" />
+                </div>
+                <div class="mb-3">
+                  <label class="form-label small mb-1">
+                    <i class="bi bi-collection me-1 text-muted"></i>Добавить в группу
+                  </label>
+                  <select class="form-select form-select-sm" id="new-svc-group">
+                    <option value="">— без группы —</option>
+                  </select>
+                  <div id="new-svc-group-loading" class="form-text d-none">
+                    <div class="spinner-border spinner-border-sm me-1"></div>Загрузка групп...
+                  </div>
                 </div>
                 <button class="btn btn-primary btn-sm w-100" id="btn-add-svc">
                   <i class="bi bi-plus-lg me-1"></i>Добавить
@@ -329,8 +340,26 @@ async function openServiceConfigs(serverId, serverName) {
   document.getElementById('new-svc-name').value = '';
   document.getElementById('new-svc-label').value = '';
   document.getElementById('new-svc-desc').value = '';
+  document.getElementById('new-svc-group').value = '';
   svcConfigModal.show();
-  await loadConfigs();
+  await Promise.all([loadConfigs(), loadGroupsSelect()]);
+}
+
+async function loadGroupsSelect() {
+  const sel = document.getElementById('new-svc-group');
+  const hint = document.getElementById('new-svc-group-loading');
+  hint.classList.remove('d-none');
+  const { ok, data } = await apiCall('/api/groups');
+  hint.classList.add('d-none');
+  if (!ok) return;
+  // Keep the first "—без группы—" option, rebuild the rest
+  sel.innerHTML = '<option value="">— без группы —</option>';
+  data.forEach(g => {
+    const opt = document.createElement('option');
+    opt.value = g.id;
+    opt.textContent = g.name;
+    sel.appendChild(opt);
+  });
 }
 
 async function loadConfigs() {
@@ -382,16 +411,32 @@ document.getElementById('btn-add-svc').addEventListener('click', async () => {
   const name = document.getElementById('new-svc-name').value.trim();
   if (!name) { showToast('Введите системное имя сервиса', 'warning'); return; }
 
+  const groupId = document.getElementById('new-svc-group').value;
   const body = {
     service_name: name,
     display_name: document.getElementById('new-svc-label').value.trim(),
     description: document.getElementById('new-svc-desc').value.trim(),
   };
+  const btn = document.getElementById('btn-add-svc');
+  btn.disabled = true;
   const { ok, data } = await apiCall(`/api/servers/${cfgServerId}/service-configs`, 'POST', body);
+  btn.disabled = false;
   if (ok) {
+    // Optionally assign to group
+    if (groupId && data.id) {
+      const { ok: gOk, data: gData } = await apiCall(
+        `/api/groups/${groupId}/items`, 'POST', { service_config_id: data.id }
+      );
+      if (!gOk) showToast(`Сервис добавлен, но не удалось назначить группу: ${gData.error}`, 'warning');
+      else {
+        const groupName = document.getElementById('new-svc-group').selectedOptions[0]?.text || '';
+        showToast(`Сервис добавлен и назначен в группу «${groupName}»`, 'success');
+      }
+    }
     document.getElementById('new-svc-name').value = '';
     document.getElementById('new-svc-label').value = '';
     document.getElementById('new-svc-desc').value = '';
+    document.getElementById('new-svc-group').value = '';
     await loadConfigs();
   } else {
     showToast(data.error || 'Ошибка', 'danger');
